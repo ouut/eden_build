@@ -1,0 +1,52 @@
+{
+    "port": 26760,
+    "num_pads": 1,
+
+    "keyboard": {
+        "buttons": {
+            "u": "A",
+            "j": "B",
+            "y": "X",
+            "h": "Y",
+
+            "r": "L",
+            "q": "ZL",
+            "t": "R",
+            "e": "ZR",
+
+            "z": "L3",
+            ".": "R3",
+
+            "f": "MINUS",
+            "g": "PLUS",
+            "8": "HOME",
+            "7": "SHARE"
+        },
+
+        "dpad": {
+            "up":    "UP",
+            "down":  "DOWN",
+            "left":  "LEFT",
+            "right": "RIGHT"
+        },
+
+        "sticks": {
+            "left": {
+                "up":    "w",
+                "down":  "s",
+                "left":  "a",
+                "right": "d",
+                "modifier": "x",
+                "scale": 0.5
+            },
+            "right": {
+                "up":    "p",
+                "down":  "l",
+                "left":  "o",
+                "right": ";",
+                "modifier": "/",
+                "scale": 0.5
+            }
+        }
+    }
+}
