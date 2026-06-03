@@ -29,6 +29,21 @@ git clone Eden → sed 改 settings.h → 全平台构建
 3. 填入 DSU Server IP 和端口（默认 26760）
 4. 按键、摇杆、体感同时生效
 
+## 测试脚本
+
+`dsu_test.py` 是一个 DSU 协议测试服务器，用于验证模拟器是否正确接收按键、摇杆和体感输入。
+
+```bash
+python3 dsu_test.py                        # 自动循环所有按键
+python3 dsu_test.py --button A             # 按住 A
+python3 dsu_test.py --button A,B,L         # 同时按住 A + B + L
+python3 dsu_test.py --button DUp           # 按十字键上
+python3 dsu_test.py --stick-left 255 128   # 左摇杆推到最右
+python3 dsu_test.py --list                 # 列出所有按键名
+```
+
+启动后在模拟器中选 "UDP Controller" 作为输入设备即可测试。
+
 ## 协议参考
 
 - [cemuhook-protocol](https://github.com/v1993/cemuhook-protocol)
