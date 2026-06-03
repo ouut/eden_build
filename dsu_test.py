@@ -16,11 +16,15 @@ Usage:
 """
 
 import argparse
+import atexit
+import os
 import selectors
 import socket
 import struct
+import termios
 import time
 import sys
+import tty
 
 # ─── DSU Protocol Constants ───────────────────────────────────────────
 SERVER_MAGIC    = 0x53555344   # "DSUS"
@@ -66,6 +70,84 @@ CMD_ALIASES = {
     "home":    "Home",       "share":   "Share",
     "options": "Options",    "none":    None,
 }
+
+# Single-key mapping for instant raw mode (no Enter needed)
+# Printable key → DSU button name
+KEY_MAP = {
+    # Face buttons
+    'j': "Circle",      # A
+    'k': "Cross",       # B
+    'u': "Triangle",    # X
+    'i': "Square",      # Y
+    # Shoulder / trigger
+    'q': "L1",          # L
+    'e': "R1",          # R
+    'z': "L2",          # ZL
+    'c': "R2",          # ZR
+    # Stick presses
+    'v': "L3",
+    'b': "R3",
+    # System
+    'm': "Share",       # Minus
+    'p': "Options",     # Plus
+    'h': "Home",
+    'n': "Share",       # Screenshot (same DSU bit as Share in many impls)
+    # D-Pad (also via arrow keys)
+    'w': "DUp",
+    's': "DDown",
+    'a': "DLeft",
+    'd': "DRight",
+}
+
+# Arrow key escape sequence suffixes
+ARROW_KEY = {
+    'A': "DUp",
+    'B': "DDown",
+    'C': "DRight",
+    'D': "DLeft",
+}
+
+# ─── Terminal Raw Mode ────────────────────────────────────────────────
+
+_fd = sys.stdin.fileno()
+_orig_termios = None
+
+
+def _enter_raw():
+    """Put terminal in raw mode: no echo, no line buffering, one char at a time."""
+    global _orig_termios
+    if _orig_termios is not None:
+        return
+    _orig_termios = termios.tcgetattr(_fd)
+    atexit.register(_exit_raw)
+    tty.setraw(_fd)
+
+
+def _exit_raw():
+    global _orig_termios
+    if _orig_termios is None:
+        return
+    termios.tcsetattr(_fd, termios.TCSADRAIN, _orig_termios)
+    _orig_termios = None
+
+
+def _read_key():
+    """Read a single keypress in raw mode. Returns (char, is_arrow, arrow_dir)."""
+    c = os.read(_fd, 1)
+    if not c:
+        return None, False, None
+    ch = c.decode('utf-8', errors='replace')
+    # Arrow keys: ESC [ A/B/C/D
+    if ch == '\x1b':
+        # Check if there's more data within 50ms
+        import select
+        if select.select([sys.stdin], [], [], 0.05)[0]:
+            c2 = os.read(_fd, 1).decode('utf-8', errors='replace')
+            if c2 == '[':
+                c3 = os.read(_fd, 1).decode('utf-8', errors='replace')
+                if c3 in ARROW_KEY:
+                    return ch, True, c3
+    return ch, False, None
 
 
 # ─── Button Parser ────────────────────────────────────────────────────
@@ -196,36 +278,120 @@ def _set_buttons(state, pad_id, mask):
     state["auto"] = False
 
 
-def _cmd_help():
+def _handle_single_key(ch, state):
+    """Process a single keypress. Returns: (handled, should_quit, should_push)."""
+    if ch in ('\x03', '\x1b'):  # Ctrl+C or Escape
+        return True, True, False
+
+    # Space = release all
+    if ch == ' ':
+        for cfg in state["pads"]:
+            cfg["buttons"] = 0
+            cfg["lx"] = cfg["ly"] = cfg["rx"] = cfg["ry"] = 128
+        state["auto"] = False
+        _print_status_line(state, "all released")
+        return True, False, True
+
+    # Tab = cycle pad
+    if ch == '\t':
+        state["active_pad"] = (state["active_pad"] + 1) % state["num_pads"]
+        _print_status_line(state, f"pad {state['active_pad']}")
+        return True, False, False
+
+    # F1 or '/' = toggle auto
+    if ch in ('/',):
+        state["auto"] = not state["auto"]
+        state["auto_idx"] = 0
+        _print_status_line(state, f"auto {'ON' if state['auto'] else 'OFF'}")
+        return True, False, False
+
+    # ':' = line command mode
+    if ch == ':':
+        _exit_raw()
+        try:
+            print()
+            line = input("  cmd> ")
+            if line.strip():
+                result = handle_command(line.strip(), state)
+                if not result:
+                    _enter_raw()
+                    return True, True, False
+        finally:
+            _enter_raw()
+        _print_status_line(state, "")
+        return True, False, True
+
+    # '?' = print key map
+    if ch == '?':
+        _print_key_legend(state)
+        return True, False, False
+
+    # Single-key button
+    dsu_name = KEY_MAP.get(ch)
+    if dsu_name and dsu_name in DSU_BUTTON:
+        cfg = _pad_configs(state, state["active_pad"])
+        cfg["buttons"] = DSU_BUTTON[dsu_name]
+        state["auto"] = False
+        sw = DSUSWITCH[dsu_name]
+        _print_status_line(state, f"{ch} -> {dsu_name} ({sw})")
+        return True, False, True
+
+    return False, False, False
+
+
+def _handle_arrow(direction, state):
+    """Handle arrow key press."""
+    dsu_name = ARROW_KEY.get(direction)
+    if dsu_name and dsu_name in DSU_BUTTON:
+        cfg = _pad_configs(state, state["active_pad"])
+        cfg["buttons"] = DSU_BUTTON[dsu_name]
+        state["auto"] = False
+        sw = DSUSWITCH[dsu_name]
+        _print_status_line(state, f"arrow -> {dsu_name} ({sw})")
+        return True
+    return False
+
+
+def _print_status_line(state, action):
+    """Print a compact status line."""
+    cfg = _pad_configs(state, state["active_pad"])
+    names = _button_names(cfg["buttons"])
+    label = ", ".join(names) if names else "(none)"
+    pad_info = f"[pad {state['active_pad']}]" if state["num_pads"] > 1 else ""
+    stick = f"L=({cfg['lx']},{cfg['ly']}) R=({cfg['rx']},{cfg['ry']})"
+    auto = " [AUTO]" if state["auto"] else ""
+    connected = " [connected]" if state.get("client_addr") else ""
+    info = f"{pad_info} [{label}]  {stick}{auto}{connected}"
+    if action:
+        info = f"{action}  {info}"
+    # Clear line and print
+    sys.stdout.write(f"\r\x1b[K{info}\n")
+    sys.stdout.flush()
+
+
+def _print_key_legend(state):
+    """Print compact key legend (does not break raw mode)."""
+    _exit_raw()
     print("""
-  Interactive commands (Eden polls every ~3s):
-
-  BUTTONS (press one, release others):
-    a  b  x  y          Face buttons
-    l  r  zl  zr        Shoulder / triggers
-    up  down  left  right  D-Pad
-    +  -                 Plus / Minus (= Options / Share)
-    l3  r3               Stick presses
-    home  share          System buttons
-
-  COMBOS:
-    a,b     Hold A and B together
-    l,zr    Hold L and ZR together
-
-  STICKS:
-    stick 128 0          Left stick up
-    stick 255 128        Left stick right
-    rstick 128 255       Right stick down
-
-  CONTROL:
-    pad 1 a              Target pad 1, press A
-    pads                 Show current state
-    none                 Release all buttons, center sticks
-    auto                 Toggle auto-cycling mode
-    auto 0.5             Auto-cycle at 0.5s interval
-    list                 List all button names
-    quit / q             Exit
+  KEYS (no Enter needed):
+    j k u i     A B X Y (face buttons)
+    q e         L R   (shoulders)
+    z c         ZL ZR (triggers)
+    v b         L3 R3 (stick press)
+    w a s d     D-Pad (or arrow keys)
+    m           Minus (-)
+    p           Plus (+)
+    h           Home
+    Space       Release all
+    Tab         Cycle pad
+    /           Toggle auto-cycle
+    ?           This help
+    :           Text command (stick, pad N, etc.)
+    Esc         Quit
 """)
+    input("  Press Enter to continue...")
+    _enter_raw()
+    _print_status_line(state, "")
 
 
 def handle_command(cmd: str, state):
@@ -459,23 +625,23 @@ def push_pad_data(sock, state):
 
 
 def serve_interactive(args):
-    """Interactive mode: multiplex stdin and UDP socket with push on command."""
+    """Interactive mode: raw terminal, single-key instant input."""
     state = _init_state(args)
     sock = _create_socket(args.port)
     sock.settimeout(0.1)
 
     sel = selectors.DefaultSelector()
     sel.register(sock, selectors.EVENT_READ, data="socket")
-    sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
 
-    print(f"[DSU] Interactive mode  UDP 0.0.0.0:{args.port}  {state['num_pads']} pad(s)")
-    print("[DSU] Waiting for Eden to connect...")
-    print("[DSU] Commands push instantly once connected (type help, or quit)")
-    _print_state(state)
+    _enter_raw()
+
+    print(f"\r[DSU] Interactive  UDP 0.0.0.0:{args.port}  {state['num_pads']} pad(s)")
+    print(f"\r[DSU] Keys: j/k/u/i=ABXY  q/e=L/R  z/c=ZL/ZR  w/a/s/d/arrows=D-Pad  Space=release  Esc=quit  ?=help  :=cmd")
+    _print_status_line(state, "waiting for Eden...")
 
     try:
         while True:
-            events = sel.select(timeout=0.5)
+            events = sel.select(timeout=0.1)
             for key, _mask in events:
                 if key.data == "socket":
                     try:
@@ -492,25 +658,35 @@ def serve_interactive(args):
                     if msg_type == TYPE_VERSION:
                         resp = build_version_response(req_id)
                         sock.sendto(resp, addr)
-                        print(f"[->] Version -> {addr}")
+                        _print_status_line(state, "Eden connected")
                     elif msg_type == TYPE_PORT_INFO:
                         resp = build_port_info_response(req_id, state["num_pads"])
                         sock.sendto(resp, addr)
-                        print(f"[->] PortInfo ({state['num_pads']} pads) -> {addr}")
                     elif msg_type == TYPE_PAD_DATA:
                         handle_dsu_request(sock, data, addr, state)
-                    else:
-                        print(f"[?] Unknown type 0x{msg_type:08x} from {addr}")
-                elif key.data == "stdin":
-                    line = sys.stdin.readline()
-                    if not line:
-                        break
-                    if not handle_command(line, state):
-                        print("[DSU] Stopped.")
-                        return
-                    # Push immediately — no waiting for poll
+
+            # Read single keypress (non-blocking in raw mode)
+            import select
+            if select.select([sys.stdin], [], [], 0)[0]:
+                ch, is_arrow, arrow_dir = _read_key()
+                if ch is None:
+                    continue
+
+                if is_arrow:
+                    if _handle_arrow(arrow_dir, state):
+                        push_pad_data(sock, state)
+                    continue
+
+                handled, quit_, push = _handle_single_key(ch, state)
+                if quit_:
+                    break
+                if push:
                     push_pad_data(sock, state)
+
     except KeyboardInterrupt:
+        pass
+    finally:
+        _exit_raw()
         print("\n[DSU] Stopped.")
 
 
