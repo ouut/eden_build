@@ -173,7 +173,7 @@ def parse_request(data: bytes, addr) -> tuple:
     magic, proto, payload_len, crc, req_id = struct.unpack_from("<IHHII", data, 0)
     if magic != CLIENT_MAGIC:
         return None
-    msg_type = struct.unpack_from("<I", data, 20)[0] if len(data) >= 24 else 0
+    msg_type = struct.unpack_from("<I", data, 16)[0]
     return msg_type, req_id
 
 
