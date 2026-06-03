@@ -437,11 +437,31 @@ def serve(args):
         print("\n[DSU] Stopped.")
 
 
+def push_pad_data(sock, state):
+    """Immediately send PadData for all pads to the cached client address."""
+    addr = state.get("client_addr")
+    if not addr:
+        return
+    for pid in range(state["num_pads"]):
+        cfg = _pad_configs(state, pid)
+        resp = build_pad_data_response(state.get("last_req_id", 0),
+                                       cfg["buttons"],
+                                       lx=cfg["lx"], ly=cfg["ly"],
+                                       rx=cfg["rx"], ry=cfg["ry"],
+                                       counter=state["counter"], pad_id=pid)
+        sock.sendto(resp, addr)
+        state["counter"] += 1
+    # Show only the active pad
+    cfg = _pad_configs(state, state["active_pad"])
+    names = _button_names(cfg["buttons"])
+    label = ", ".join(names) if names else "(none)"
+    print(f"[push] Pad 0-{state['num_pads']-1}  [{label}]")
+
+
 def serve_interactive(args):
-    """Interactive mode: multiplex stdin and UDP socket."""
+    """Interactive mode: multiplex stdin and UDP socket with push on command."""
     state = _init_state(args)
     sock = _create_socket(args.port)
-    # Use shorter timeout in interactive mode so stdin feels responsive
     sock.settimeout(0.1)
 
     sel = selectors.DefaultSelector()
@@ -449,7 +469,8 @@ def serve_interactive(args):
     sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
 
     print(f"[DSU] Interactive mode  UDP 0.0.0.0:{args.port}  {state['num_pads']} pad(s)")
-    print("[DSU] Type a command (a/b/x/y/l/r/zl/zr/+/up/down/left/right/...), help, or quit")
+    print("[DSU] Waiting for Eden to connect...")
+    print("[DSU] Commands push instantly once connected (type help, or quit)")
     _print_state(state)
 
     try:
@@ -459,16 +480,36 @@ def serve_interactive(args):
                 if key.data == "socket":
                     try:
                         data, addr = sock.recvfrom(128)
-                        handle_dsu_request(sock, data, addr, state)
                     except socket.timeout:
-                        pass
+                        continue
+                    result = parse_request(data, addr)
+                    if result is None:
+                        continue
+                    msg_type, req_id = result
+                    state["client_addr"] = addr
+                    state["last_req_id"] = req_id
+
+                    if msg_type == TYPE_VERSION:
+                        resp = build_version_response(req_id)
+                        sock.sendto(resp, addr)
+                        print(f"[->] Version -> {addr}")
+                    elif msg_type == TYPE_PORT_INFO:
+                        resp = build_port_info_response(req_id, state["num_pads"])
+                        sock.sendto(resp, addr)
+                        print(f"[->] PortInfo ({state['num_pads']} pads) -> {addr}")
+                    elif msg_type == TYPE_PAD_DATA:
+                        handle_dsu_request(sock, data, addr, state)
+                    else:
+                        print(f"[?] Unknown type 0x{msg_type:08x} from {addr}")
                 elif key.data == "stdin":
                     line = sys.stdin.readline()
                     if not line:
-                        break  # EOF
+                        break
                     if not handle_command(line, state):
                         print("[DSU] Stopped.")
                         return
+                    # Push immediately — no waiting for poll
+                    push_pad_data(sock, state)
     except KeyboardInterrupt:
         print("\n[DSU] Stopped.")
 
