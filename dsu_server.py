@@ -7,9 +7,11 @@ DSU client over UDP; this server responds to its polls and instantly pushes
 data on every state change.
 
 Keyboard mapping is loaded from keyboard_config.json at startup.
+Uses tkinter (built into Python) for proper key-down / key-up events —
+press to activate, release to deactivate, same as the emulator itself.
 
 Usage:
-  python3 dsu_server.py                        # Interactive keyboard mode
+  python3 dsu_server.py                        # Keyboard + DSU server
   python3 dsu_server.py -c my_config.json      # Custom config
   python3 dsu_server.py --pads 4               # 4-player support
   python3 dsu_server.py --no-keyboard          # DSU server only
@@ -28,6 +30,7 @@ Extend with custom logic:
   server.start()   # blocks, runs UDP + keyboard event loop
 """
 
+import argparse
 import atexit
 import json
 import os
@@ -35,9 +38,9 @@ import selectors
 import socket
 import struct
 import sys
-import termios
+import threading
 import time
-import tty
+import tkinter as tk
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -70,18 +73,13 @@ ALIASES = {
     "Options": "Options",
 }
 
-DSU_NAMES = {  # friendly name → display label for status line
+DSU_NAMES = {
     "A": "A", "B": "B", "X": "X", "Y": "Y",
     "L": "L", "R": "R", "ZL": "ZL", "ZR": "ZR",
     "L3": "L3", "R3": "R3",
     "UP": "Up", "DOWN": "Dn", "LEFT": "Lt", "RIGHT": "Rt",
     "PLUS": "+", "MINUS": "-", "HOME": "Home", "SHARE": "Share",
 }
-
-ARROW_KEY = {'A': "UP", 'B': "DOWN", 'C': "RIGHT", 'D': "LEFT"}
-
-_fd = sys.stdin.fileno()
-_orig_termios = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -152,7 +150,6 @@ def _parse_request(data: bytes):
 def _resolve_config_path(path: str) -> str:
     if os.path.isabs(path):
         return path
-    # Look next to the script first, then cwd
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for base in (script_dir, os.getcwd()):
         full = os.path.join(base, path)
@@ -161,7 +158,7 @@ def _resolve_config_path(path: str) -> str:
     return os.path.join(os.getcwd(), path)
 
 
-def load_keyboard_config(path: str = "keyboard_config.json") -> dict:
+def load_keyboard_config(path: str) -> dict:
     """Load keyboard mapping from JSON. Returns config dict."""
     full = _resolve_config_path(path)
     with open(full) as f:
@@ -171,17 +168,15 @@ def load_keyboard_config(path: str = "keyboard_config.json") -> dict:
     result = {
         "port": cfg.get("port", 26760),
         "num_pads": cfg.get("num_pads", 1),
-        # char → button name (for buttons and dpad combined)
+        # char → button name
         "button_map": {},
-        # stick axis conflicts: char → conflicting char (removed when this key pressed)
-        "conflicts": {},
-        # char → (side, axis, direction, full_value, half_value)
+        # char → (side, direction, full_value, half_value)
         "stick_map": {},
-        # modifier key char and scale
+        # modifier key chars and scale
         "mod_left": kb["sticks"]["left"].get("modifier"),
         "mod_right": kb["sticks"]["right"].get("modifier"),
         "mod_scale": kb["sticks"]["left"].get("scale", 0.5),
-        # All known chars (for help display)
+        # All known chars (for fast lookup)
         "all_chars": set(),
     }
 
@@ -190,14 +185,14 @@ def load_keyboard_config(path: str = "keyboard_config.json") -> dict:
         result["button_map"][ch] = name
         result["all_chars"].add(ch)
 
-    # DPad: arrow keys handled separately in stdin handler
+    # DPad: arrow keys → button name
     for ch, name in kb.get("dpad", {}).items():
         result["button_map"][ch] = name
         result["all_chars"].add(ch)
 
-    # Stick mappings
-    for side_key, stick_key in [("left", "left"), ("right", "right")]:
-        stick = kb["sticks"].get(stick_key, {})
+    # Stick mappings: char → (side, direction, full_val, half_val)
+    for side_key in ("left", "right"):
+        stick = kb["sticks"].get(side_key, {})
         for dir_ in ("up", "down", "left", "right"):
             ch = stick.get(dir_)
             if not ch:
@@ -207,18 +202,10 @@ def load_keyboard_config(path: str = "keyboard_config.json") -> dict:
             result["stick_map"][ch] = (side_key, dir_, full_val, half_val)
             result["all_chars"].add(ch)
 
-        # Conflicts: up/down and left/right on the same stick
-        for a, b in (("up", "down"), ("left", "right")):
-            ca, cb = stick.get(a), stick.get(b)
-            if ca and cb:
-                result["conflicts"][ca] = cb
-                result["conflicts"][cb] = ca
-
     return result
 
 
 def _stick_value(direction: str, scale: float) -> int:
-    """Compute stick byte value for a direction with given scale."""
     delta = int(127 * scale)
     if direction == "up":
         return 128 - delta
@@ -239,13 +226,45 @@ def _format_key_help(cfg: dict) -> str:
     if btn:
         lines.append("  Buttons: " + " ".join(
             f"{ch}={DSU_NAMES.get(name, name)}" for ch, name in sorted(btn)))
+
     sticks = {}
-    for ch, (side, dir_, full, half) in cfg["stick_map"].items():
+    for ch, (side, dir_, _, _) in cfg["stick_map"].items():
         sticks.setdefault(side, []).append(f"{ch}={dir_[:2]}")
     for side, entries in sticks.items():
         lines.append(f"  {side.capitalize()} stick: " + " ".join(sorted(entries)))
-    lines.append(f"  Space=release  Tab=cycle pad  :=cmd  Esc=quit")
+
+    lines.append("  Esc=quit  Tab=cycle pad")
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# tkinter keysym → config char
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _tk_to_char(event: tk.Event) -> str:
+    """Convert a tkinter key event to the char used in JSON config."""
+    ks = event.keysym
+
+    # Arrow keys → use the dpad direction names in config
+    if ks in ("Up", "Down", "Left", "Right"):
+        return ks.lower()
+
+    # Period, semicolon, slash, apostrophe — tkinter sends them as names
+    special = {
+        "period": ".", "semicolon": ";", "slash": "/",
+        "quoteright": "'", "apostrophe": "'",
+        "comma": ",", "bracketleft": "[", "bracketright": "]",
+        "minus": "-", "equal": "=", "backslash": "\\",
+        "grave": "`",
+    }
+    if ks.lower() in special:
+        return special[ks.lower()]
+
+    # Regular printable char
+    if len(event.char) == 1 and event.char.isprintable():
+        return event.char
+
+    return ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -290,13 +309,14 @@ class DsuServer:
         self._active_pad = 0
 
         # Keyboard state
-        self._keys_active = set()      # currently toggled-on key chars
+        self._keys_held = set()       # currently held key chars
         self._kbd_cfg = None
+        self._tk_root = None
+
         if keyboard:
             self._kbd_cfg = load_keyboard_config(config_path)
             self.port = self._kbd_cfg.get("port", self.port)
             self.num_pads = max(1, min(4, self._kbd_cfg.get("num_pads", self.num_pads)))
-            # Re-allocate pads if num_pads changed
             while len(self._pads) < self.num_pads:
                 self._pads.append(dict(buttons=0, lx=128, ly=128, rx=128, ry=128,
                                        home=0, touch=0, touch_x=0, touch_y=0,
@@ -360,44 +380,206 @@ class DsuServer:
     # ── Server lifecycle ─────────────────────────────────────────────────
 
     def start(self):
-        """Start the DSU server. Blocks until stop() is called or SIGINT."""
+        """Start the DSU server. Blocks until stop() or window close."""
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind(("0.0.0.0", self.port))
         self._sock.setblocking(False)
-        self._sel.register(self._sock, selectors.EVENT_READ, data="udp")
-
-        if self.keyboard_enabled:
-            self._enter_raw()
-            self._sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
-            self._print_banner()
+        self._sel.register(self._sock, selectors.EVENT_READ)
 
         self._running = True
-        try:
-            self._loop()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self._shutdown()
+
+        if self.keyboard_enabled:
+            # UDP runs in background thread, tkinter on main thread
+            threading.Thread(target=self._udp_loop, daemon=True).start()
+            self._start_tk()
+        else:
+            try:
+                self._udp_loop()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                self._shutdown()
 
     def stop(self):
         self._running = False
+        if self._tk_root:
+            self._tk_root.quit()
 
-    def _loop(self):
+    def _udp_loop(self):
         while self._running:
             for key, _mask in self._sel.select(timeout=0.1):
-                tag = key.data
-                if tag == "udp":
-                    self._handle_udp()
-                elif tag == "stdin":
-                    self._handle_stdin()
+                self._handle_udp()
 
     def _shutdown(self):
-        if self.keyboard_enabled:
-            self._exit_raw()
         if self._sock:
+            try:
+                self._sel.unregister(self._sock)
+            except Exception:
+                pass
             self._sock.close()
         self._sel.close()
+
+    # ── tkinter keyboard ─────────────────────────────────────────────────
+
+    def _start_tk(self):
+        self._tk_root = tk.Tk()
+        self._tk_root.title("DSU Server - keep this window focused")
+        self._tk_root.geometry("320x100")
+        self._tk_root.resizable(False, False)
+
+        frame = tk.Frame(self._tk_root)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        tk.Label(frame, text="DSU Server", font=("", 14, "bold")).pack()
+        tk.Label(frame, text=f"UDP 0.0.0.0:{self.port}  {self.num_pads} pad(s)").pack()
+
+        self._status_var = tk.StringVar()
+        tk.Label(frame, textvariable=self._status_var, fg="gray").pack()
+
+        self._status_var.set("Keep this window focused for keyboard input.")
+
+        self._tk_root.bind("<KeyPress>", self._on_press)
+        self._tk_root.bind("<KeyRelease>", self._on_release)
+        self._tk_root.protocol("WM_DELETE_WINDOW", self.stop)
+        self._tk_root.focus_force()
+
+        sys.stdout.write(
+            f"[DSU Server] UDP 0.0.0.0:{self.port}  {self.num_pads} pad(s)\n"
+            f"{_format_key_help(self._kbd_cfg)}\n\n"
+            f"  Keep the 'DSU Server' window focused for keyboard input.\n\n")
+        sys.stdout.flush()
+
+        self._tk_root.mainloop()
+        self._shutdown()
+
+    def _on_press(self, event: tk.Event):
+        """Key pressed → activate."""
+        if self._running is False:
+            return
+
+        ch = _tk_to_char(event)
+        if not ch:
+            return
+
+        # Esc → quit
+        if event.keysym == "Escape":
+            self._running = False
+            self._tk_root.quit()
+            return
+
+        # Tab → cycle pad
+        if event.keysym == "Tab":
+            self._active_pad = (self._active_pad + 1) % self.num_pads
+            self._update_status()
+            return
+
+        # Already held (auto-repeat) → ignore
+        if ch in self._keys_held:
+            return
+
+        cfg = self._kbd_cfg
+        if ch in cfg["all_chars"]:
+            self._keys_held.add(ch)
+            self._apply_key_state()
+
+    def _on_release(self, event: tk.Event):
+        """Key released → deactivate."""
+        if self._running is False:
+            return
+
+        ch = _tk_to_char(event)
+        if not ch:
+            return
+
+        if ch in self._keys_held:
+            self._keys_held.discard(ch)
+            self._apply_key_state()
+
+    def _apply_key_state(self):
+        """Recompute pad state from currently held keys."""
+        cfg = self._kbd_cfg
+        p = self._pads[self._active_pad]
+
+        mask = 0
+        home = 0
+        lx, ly = 128, 128
+        rx, ry = 128, 128
+
+        mod_active = (cfg.get("mod_left") in self._keys_held or
+                      cfg.get("mod_right") in self._keys_held)
+        use_scale = cfg["mod_scale"] if mod_active else 1.0
+
+        # Compute stick positions: multiple held direction keys combine
+        lx_parts = []
+        ly_parts = []
+        rx_parts = []
+        ry_parts = []
+
+        for ch in self._keys_held:
+            if ch in cfg["button_map"]:
+                name = cfg["button_map"][ch]
+                dsu_name = ALIASES.get(name.upper(), name)
+                if dsu_name is None:
+                    home = 1
+                elif dsu_name in BUTTON_BIT:
+                    mask |= BUTTON_BIT[dsu_name]
+
+            elif ch in cfg["stick_map"]:
+                side, dir_, full_val, half_val = cfg["stick_map"][ch]
+                val = half_val if mod_active else full_val
+                if side == "left":
+                    if dir_ in ("up", "down"):
+                        ly_parts.append(val)
+                    else:
+                        lx_parts.append(val)
+                else:
+                    if dir_ in ("up", "down"):
+                        ry_parts.append(val)
+                    else:
+                        rx_parts.append(val)
+
+        # Merge stick directions: average if both left+right or up+down pressed
+        if lx_parts:
+            lx = sum(lx_parts) // len(lx_parts)
+        if ly_parts:
+            ly = sum(ly_parts) // len(ly_parts)
+        if rx_parts:
+            rx = sum(rx_parts) // len(rx_parts)
+        if ry_parts:
+            ry = sum(ry_parts) // len(ry_parts)
+
+        p["buttons"] = mask
+        p["home"] = home
+        p["lx"] = lx
+        p["ly"] = ly
+        p["rx"] = rx
+        p["ry"] = ry
+        self._push()
+        self._update_status()
+
+    def _update_status(self):
+        """Update tkinter status label."""
+        p = self._pads[self._active_pad]
+        cfg = self._kbd_cfg
+
+        parts = []
+        for ch in sorted(self._keys_held):
+            if ch in cfg["button_map"]:
+                parts.append(DSU_NAMES.get(cfg["button_map"][ch], cfg["button_map"][ch]))
+            elif ch in cfg["stick_map"]:
+                side, dir_, _, _ = cfg["stick_map"][ch]
+                parts.append(f"{side[:1].upper()}S-{dir_[:2]}")
+
+        label = ",".join(parts) if parts else "(none)"
+        pad_info = f"[pad {self._active_pad}] " if self.num_pads > 1 else ""
+        client = " [connected]" if self._client_addr else ""
+        status = f"{pad_info}[{label}]  L=({p['lx']},{p['ly']}) R=({p['rx']},{p['ry']}){client}"
+
+        if self._tk_root:
+            self._status_var.set(status)
+        sys.stdout.write(f"\r\x1b[K{status}\n")
+        sys.stdout.flush()
 
     # ── UDP DSU protocol ─────────────────────────────────────────────────
 
@@ -442,302 +624,9 @@ class DsuServer:
         for pid in range(self.num_pads):
             self._send_pad(pid)
 
-    # ── Keyboard: raw terminal ───────────────────────────────────────────
-
-    def _enter_raw(self):
-        global _orig_termios
-        if _orig_termios is not None:
-            return
-        _orig_termios = termios.tcgetattr(_fd)
-        atexit.register(self._exit_raw)
-        tty.setraw(_fd)
-
-    def _exit_raw(self):
-        global _orig_termios
-        if _orig_termios is None:
-            return
-        termios.tcsetattr(_fd, termios.TCSADRAIN, _orig_termios)
-        _orig_termios = None
-
-    def _print_banner(self):
-        cfg = self._kbd_cfg
-        sys.stdout.write(
-            f"\r[DSU Server] UDP 0.0.0.0:{self.port}  {self.num_pads} pad(s)  "
-            f"config: {self._config_name}\n"
-            f"{_format_key_help(cfg) if cfg else ''}\n"
-            f"\r  {self._status()}\n")
-        sys.stdout.flush()
-
-    @property
-    def _config_name(self):
-        return "keyboard_config.json"  # simplified
-
-    def _status(self):
-        p = self._pads[self._active_pad]
-        if self._keys_active:
-            btn = self._active_keys_label()
-        else:
-            btn = self._mask_label(p["buttons"])
-        pad_info = f"[pad {self._active_pad}/{self.num_pads}] " if self.num_pads > 1 else ""
-        client = " [connected]" if self._client_addr else ""
-        return f"{pad_info}[{btn}]  L=({p['lx']},{p['ly']}) R=({p['rx']},{p['ry']}){client}"
-
-    def _active_keys_label(self):
-        """Build label showing which keys are currently active."""
-        cfg = self._kbd_cfg
-        if not cfg:
-            return "(none)"
-        parts = []
-        for ch in sorted(self._keys_active):
-            if ch in cfg["button_map"]:
-                name = cfg["button_map"][ch]
-                parts.append(DSU_NAMES.get(name, name))
-            elif ch in cfg["stick_map"]:
-                side, dir_, _, _ = cfg["stick_map"][ch]
-                parts.append(f"{side[:1].upper()}S-{dir_[:2]}")
-        return ",".join(parts) if parts else "(none)"
-
-    def _mask_label(self, mask):
-        if mask == 0:
-            return "(none)"
-        rev = {}
-        for friendly, dsu in ALIASES.items():
-            if dsu and friendly == friendly.upper() and len(friendly) <= 5:
-                rev[dsu] = friendly
-        names = []
-        for dsu, bit in BUTTON_BIT.items():
-            if mask & bit:
-                names.append(rev.get(dsu, dsu))
-        return ",".join(names)
-
-    # ── Keyboard: input handler (toggle model) ───────────────────────────
-
-    def _handle_stdin(self):
-        ch, is_arrow, arrow_dir = _read_key()
-        if ch is None:
-            return
-
-        # Arrow keys → dpad
-        if is_arrow:
-            name = ARROW_KEY.get(arrow_dir)
-            if name:
-                self.press(name, pad=self._active_pad)
-                self._echo(f"arrow -> {name}")
-            return
-
-        if ch in ('\x03', '\x1b'):    # Ctrl+C / Esc
-            self._running = False
-            return
-
-        if ch == ' ':                  # Space = release all
-            self._keys_active.clear()
-            self.release()
-            self._echo("all released")
-            return
-
-        if ch == '\t':                 # Tab = cycle pad
-            self._active_pad = (self._active_pad + 1) % self.num_pads
-            self._echo(f"pad {self._active_pad}")
-            return
-
-        if ch == '?':                  # Help
-            self._print_help()
-            return
-
-        if ch == ':':                  # Text command
-            self._exit_raw()
-            try:
-                print()
-                cmd = input("  cmd> ").strip()
-                if cmd:
-                    self._run_command(cmd)
-            finally:
-                self._enter_raw()
-            self._echo("")
-            return
-
-        # Toggle key in active set
-        cfg = self._kbd_cfg
-        if cfg is None:
-            return
-
-        if ch in cfg["button_map"] or ch in cfg["stick_map"] or ch in (cfg.get("mod_left"), cfg.get("mod_right")):
-            self._toggle_key(ch)
-            self._apply_key_state()
-
-    def _toggle_key(self, ch):
-        """Toggle a key in/out of the active set, handling conflicts."""
-        cfg = self._kbd_cfg
-        if ch in self._keys_active:
-            self._keys_active.remove(ch)
-            return
-
-        # Remove conflicting key (same axis, opposite direction)
-        conflict = cfg["conflicts"].get(ch)
-        if conflict:
-            self._keys_active.discard(conflict)
-
-        self._keys_active.add(ch)
-
-    def _apply_key_state(self):
-        """Recompute pad button mask and stick positions from active keys."""
-        cfg = self._kbd_cfg
-        p = self._pads[self._active_pad]
-
-        mask = 0
-        home = 0
-        lx, ly = 128, 128
-        rx, ry = 128, 128
-
-        # Check modifier keys
-        mod_active = (cfg.get("mod_left") in self._keys_active or
-                      cfg.get("mod_right") in self._keys_active)
-        use_scale = cfg["mod_scale"] if mod_active else 1.0
-
-        for ch in self._keys_active:
-            # Button key
-            if ch in cfg["button_map"]:
-                name = cfg["button_map"][ch]
-                dsu_name = ALIASES.get(name.upper(), name)
-                if dsu_name is None:
-                    home = 1
-                elif dsu_name in BUTTON_BIT:
-                    mask |= BUTTON_BIT[dsu_name]
-
-            # Stick key
-            elif ch in cfg["stick_map"]:
-                side, dir_, full_val, half_val = cfg["stick_map"][ch]
-                val = half_val if mod_active else full_val
-                if side == "left":
-                    if dir_ in ("up", "down"):
-                        ly = val
-                    else:
-                        lx = val
-                else:
-                    if dir_ in ("up", "down"):
-                        ry = val
-                    else:
-                        rx = val
-
-        p["buttons"] = mask
-        p["home"] = home
-        p["lx"] = lx
-        p["ly"] = ly
-        p["rx"] = rx
-        p["ry"] = ry
-        self._push()
-        self._echo("")
-
-    # ── Text commands ────────────────────────────────────────────────────
-
-    def _run_command(self, cmd: str):
-        parts = cmd.split()
-        if not parts:
-            return
-        c = parts[0].upper()
-
-        if c in ("Q", "QUIT"):
-            self._running = False
-        elif c in ("RELEASE", "NONE"):
-            self._keys_active.clear()
-            self.release()
-            print(f"  {self._status()}")
-        elif c in ALIASES or c == "HOME":
-            self.press(c)
-            self._keys_active.clear()
-            print(f"  {self._status()}")
-        elif c == "STICK":
-            if len(parts) >= 4:
-                side, x, y = parts[1].lower(), int(parts[2]), int(parts[3])
-                self.stick(side, x, y, self._active_pad)
-                print(f"  {self._status()}")
-            else:
-                print("  Usage: stick left|right <x> <y>")
-        elif c == "PAD":
-            if len(parts) < 2:
-                print("  Usage: pad <N> [command]")
-                return
-            try:
-                n = int(parts[1])
-            except ValueError:
-                print(f"  Invalid pad: {parts[1]}")
-                return
-            if not 0 <= n < self.num_pads:
-                print(f"  Pad must be 0-{self.num_pads - 1}")
-                return
-            if len(parts) == 2:
-                self._active_pad = n
-                print(f"  Active pad: {n}")
-            else:
-                saved = self._active_pad
-                self._active_pad = n
-                self._run_command(" ".join(parts[2:]))
-                self._active_pad = saved
-        elif c == "STATE":
-            for i, p in enumerate(self._pads):
-                btn = self._mask_label(p["buttons"])
-                print(f"  Pad {i}: [{btn}]  "
-                      f"L=({p['lx']},{p['ly']}) R=({p['rx']},{p['ry']})")
-        elif c == "HELP":
-            self._print_cmd_help()
-        else:
-            print(f"  Unknown: {c}  (try 'help')")
-
-    def _echo(self, msg):
-        sys.stdout.write(f"\r\x1b[K{msg}  {self._status()}\n")
-        sys.stdout.flush()
-
-    def _print_help(self):
-        self._exit_raw()
-        cfg = self._kbd_cfg
-        print(f"\n{_format_key_help(cfg) if cfg else '  (no keyboard config)'}")
-        print("""
-  ?           This help
-  :           Text command mode (stick, pad N, etc.)
-  Esc         Quit
-""")
-        input("  Press Enter to continue...")
-        self._enter_raw()
-        self._echo("")
-
-    @staticmethod
-    def _print_cmd_help():
-        print("""
-  Commands:
-    A, B, X, Y, L, R, ZL, ZR, L3, R3   — hold button
-    UP, DOWN, LEFT, RIGHT              — d-pad
-    PLUS, MINUS, HOME                  — system
-    release | none                     — release all
-    state                              — show all pads
-    stick left|right <x> <y>           — set stick (0-255)
-    pad <N>                            — switch active pad
-    pad <N> <command>                  — run command on specific pad
-    quit                               — stop server
-""")
-
     @property
     def client_connected(self) -> bool:
         return self._client_addr is not None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Terminal raw-mode helpers
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _read_key():
-    c = os.read(_fd, 1)
-    if not c:
-        return None, False, None
-    ch = c.decode('utf-8', errors='replace')
-    if ch == '\x1b':
-        import select
-        if select.select([sys.stdin], [], [], 0.05)[0]:
-            c2 = os.read(_fd, 1).decode('utf-8', errors='replace')
-            if c2 == '[':
-                c3 = os.read(_fd, 1).decode('utf-8', errors='replace')
-                if c3 in ARROW_KEY:
-                    return ch, True, c3
-    return ch, False, None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -745,7 +634,6 @@ def _read_key():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    import argparse
     parser = argparse.ArgumentParser(
         description="DSU Server for Eden Switch Emulator input testing")
     parser.add_argument("--port", type=int, default=None,

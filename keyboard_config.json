@@ -41,9 +41,9 @@
             },
             "right": {
                 "up":    "p",
-                "down":  "l",
-                "left":  "o",
-                "right": ";",
+                "down":  ";",
+                "left":  "l",
+                "right": "'",
                 "modifier": "/",
                 "scale": 0.5
             }
