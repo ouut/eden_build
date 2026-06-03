@@ -56,6 +56,14 @@ jobs:
       - name: Clone
         run: ./.ci/forgejo.sh --clone ${{ inputs.build-id }}
 
+      - name: Patch DSU
+        run: |
+          echo "Applying DSU full controller patch..."
+          sed -i 's/enable_udp_controller{linkage, false/enable_udp_controller{linkage, true/' \
+            eden/src/common/settings.h
+          grep -q 'enable_udp_controller{linkage, true' eden/src/common/settings.h && \
+            echo "DSU patch applied successfully" || { echo "DSU patch FAILED"; exit 1; }
+
       # Clone step is still changing forgejo.env, due to a bug on Forgejo, send after it
       # <https://codeberg.org/forgejo/forgejo/issues/9601>
       - name: Upload payload environment
