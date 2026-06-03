@@ -32,8 +32,8 @@
 
         "sticks": {
             "left": {
-                "up":    "w",
-                "down":  "s",
+                "up":    "s",
+                "down":  "w",
                 "left":  "a",
                 "right": "d",
                 "modifier": "x",
