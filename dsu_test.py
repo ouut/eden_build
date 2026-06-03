@@ -5,6 +5,8 @@ DSU Protocol Test Server for Eden/Citron Switch Emulators.
 Spoofs a DSU (Cemuhook) controller server to test whether the emulator
 correctly receives and processes all button, stick, and motion inputs.
 
+Supports multiple virtual pads (up to 4 per DSU server).
+
 Usage:
   python3 dsu_test.py                  # Cycle through all buttons
   python3 dsu_test.py --button A       # Hold button A
@@ -12,6 +14,7 @@ Usage:
   python3 dsu_test.py --list           # List all button names
   python3 dsu_test.py --stick-left 128 0    # Left stick full right
   python3 dsu_test.py --stick-right 128 128 # Right stick bottom-right
+  python3 dsu_test.py --pads 4              # 4-player test (all same buttons)
 """
 
 import argparse
@@ -62,6 +65,30 @@ DSUSWITCH = {
     "Cross":     "B",          "Square":    "Y",
 }
 
+
+# ─── Button Parser ────────────────────────────────────────────────────
+
+def parse_button_names(raw: str):
+    """Parse comma-separated button names, case-insensitive. Returns (mask, labels)."""
+    mask = 0
+    labels = []
+    for name in raw.split(","):
+        name = name.strip()
+        if not name:
+            continue
+        match = None
+        for dsu_name in DSU_BUTTON:
+            if dsu_name.lower() == name.lower():
+                match = dsu_name
+                break
+        if match:
+            mask |= DSU_BUTTON[match]
+            labels.append(f"{match} → {DSUSWITCH[match]}")
+        else:
+            print(f"Warning: Unknown button '{name}'. Use --list to see all names.")
+    return mask, labels
+
+
 # ─── Packet Builders ──────────────────────────────────────────────────
 
 def crc32(data: bytes) -> int:
@@ -94,7 +121,6 @@ def build_version_response(request_id: int) -> bytes:
     data = struct.pack("<H", PROTO_VERSION)  # 2 byte payload
     header = build_header(TYPE_VERSION, 2, request_id)
     msg = header + struct.pack("<I", TYPE_VERSION) + data
-    # Fill CRC
     crc = crc32(msg)
     return msg[:8] + struct.pack("<I", crc) + msg[12:]
 
@@ -102,16 +128,11 @@ def build_version_response(request_id: int) -> bytes:
 def build_port_info_response(request_id: int, pad_count: int = 1) -> bytes:
     """Response: PortInfo (type 0x00100001) - list connected controllers"""
     # Each port info entry: id(1) + state(1) + model(1) + conn_type(1) + mac(6) + battery(1) + active(1) = 12 bytes
-    port_info = struct.pack("<BBBB6sBB",
-        0,      # id
-        2,      # state (2 = Connected)
-        2,      # model (2 = FullGyro)
-        1,      # connection_type (1 = USB)
-        b'\x11\x22\x33\x44\x55\x66',  # mac
-        5,      # battery (5 = Full)
-        1,      # is_pad_active
-    )
-    data = struct.pack("<B", pad_count) + port_info * pad_count
+    entries = b''
+    for i in range(pad_count):
+        entries += struct.pack("<BBBB6sBB",
+            i, 2, 2, 1, b'\x11\x22\x33\x44\x55\x66', 5, 1)
+    data = struct.pack("<B", pad_count) + entries
     header = build_header(TYPE_PORT_INFO, 1 + 12 * pad_count, request_id)
     msg = header + struct.pack("<I", TYPE_PORT_INFO) + data
     crc = crc32(msg)
@@ -122,11 +143,11 @@ def build_pad_data_response(request_id: int, buttons: int = 0,
                              home: int = 0, touch: int = 0,
                              lx: int = 128, ly: int = 128,
                              rx: int = 128, ry: int = 128,
-                             counter: int = 0) -> bytes:
+                             counter: int = 0, pad_id: int = 0) -> bytes:
     """Response: PadData (type 0x00100002) - full controller state"""
     # PortInfo (12 bytes)
     port_info = struct.pack("<BBBB6sBB",
-        0, 2, 2, 1, b'\x11\x22\x33\x44\x55\x66', 5, 1)
+        pad_id, 2, 2, 1, b'\x11\x22\x33\x44\x55\x66', 5, 1)
 
     # PadData body (68 bytes after port_info, total PadData = 80 bytes)
     pad_data = struct.pack("<IHBBBBBB",
@@ -167,7 +188,7 @@ def build_pad_data_response(request_id: int, buttons: int = 0,
 # ─── Request Parser ───────────────────────────────────────────────────
 
 def parse_request(data: bytes, addr) -> tuple:
-    """Parse an incoming DSU request. Returns (msg_type, request_id, raw) or None."""
+    """Parse an incoming DSU request. Returns (msg_type, request_id) or None."""
     if len(data) < 20:
         return None
     magic, proto, payload_len, crc, req_id = struct.unpack_from("<IHHII", data, 0)
@@ -185,21 +206,32 @@ def serve(args):
     sock.bind(("0.0.0.0", args.port))
     sock.settimeout(0.5)
     print(f"[DSU Test Server] Listening on UDP 0.0.0.0:{args.port}")
+    print(f"[DSU Test Server] {args.num_pads} pad(s) configured")
     print(f"[DSU Test Server] Press Ctrl+C to stop.\n")
 
-    counter = 0
-    buttons = args.buttons_mask
-    button_names = args.buttons_arg or ["(none)"]
-    lx, ly = args.stick_left_x, args.stick_left_y
-    rx, ry = args.stick_right_x, args.stick_right_y
+    # Per-pad config
+    pad_configs = []
+    for i in range(args.num_pads):
+        mask, labels = args.pad_buttons[i] if args.pad_buttons[i] else (args.buttons_mask, args.buttons_arg)
+        pad_configs.append({
+            "buttons": mask,
+            "labels": labels or ["(none)"],
+            "lx": args.stick_left_x,
+            "ly": args.stick_left_y,
+            "rx": args.stick_right_x,
+            "ry": args.stick_right_y,
+        })
 
+    # Print per-pad config
+    for i, cfg in enumerate(pad_configs):
+        print(f"[Pad {i}]  buttons: {', '.join(cfg['labels'])}")
+        print(f"         L-Stick: x={cfg['lx']}, y={cfg['ly']}  R-Stick: x={cfg['rx']}, y={cfg['ry']}")
+    print()
+
+    counter = 0
+    pad_idx = 0
     all_button_names = list(DSU_BUTTON.keys())
     auto_idx = 0
-
-    print(f"[Buttons]  {', '.join(button_names)}")
-    print(f"[L-Stick]  x={lx}, y={ly}")
-    print(f"[R-Stick]  x={rx}, y={ry}")
-    print()
 
     try:
         while True:
@@ -218,32 +250,31 @@ def serve(args):
                 resp = build_version_response(req_id)
                 print(f"[->] Version response sent to {addr}")
             elif msg_type == TYPE_PORT_INFO:
-                resp = build_port_info_response(req_id)
-                print(f"[->] PortInfo response sent to {addr}")
+                resp = build_port_info_response(req_id, args.num_pads)
+                print(f"[->] PortInfo response ({args.num_pads} pads) sent to {addr}")
             elif msg_type == TYPE_PAD_DATA:
-                # Determine which buttons to send
-                current_buttons = buttons
-                current_label = ", ".join(button_names)
+                pid = pad_idx % args.num_pads
+                cfg = pad_configs[pid]
+                cur_buttons = cfg["buttons"]
+                cur_labels = cfg["labels"]
 
                 if args.auto:
-                    # Cycle through all buttons
                     name = all_button_names[auto_idx % len(all_button_names)]
-                    current_buttons = DSU_BUTTON[name]
-                    current_label = f"[{auto_idx + 1}/{len(all_button_names)}] {name} -> Switch: {DSUSWITCH[name]}"
+                    for c in pad_configs:
+                        c["buttons"] = DSU_BUTTON[name]
+                    cur_buttons = DSU_BUTTON[name]
+                    cur_labels = [f"{name} → {DSUSWITCH[name]}"]
                     auto_idx += 1
                     time.sleep(args.interval)
 
-                # Also add D-Pad if we're testing a D-Pad button
-                for dpad_name in ["DUp", "DDown", "DLeft", "DRight"]:
-                    if dpad_name in (button_names or []):
-                        # Already included in buttons
-                        pass
-
-                resp = build_pad_data_response(req_id, current_buttons,
-                                                lx=lx, ly=ly, rx=rx, ry=ry,
-                                                counter=counter)
+                resp = build_pad_data_response(req_id, cur_buttons,
+                                               lx=cfg["lx"], ly=cfg["ly"],
+                                               rx=cfg["rx"], ry=cfg["ry"],
+                                               counter=counter, pad_id=pid)
                 counter += 1
-                print(f"[->] PadData #{counter}  {current_label}  to {addr}")
+                pad_idx += 1
+                label_str = ", ".join(cur_labels)
+                print(f"[->] PadData #{counter}  pad={pid}  {label_str}  to {addr}")
             else:
                 print(f"[?]  Unknown message type 0x{msg_type:08x} from {addr}")
                 continue
@@ -262,21 +293,28 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                         Cycle all buttons automatically
-  %(prog)s --button A              Hold A
-  %(prog)s --button A,B,L          Hold A + B + L
-  %(prog)s --button DUp            Press D-Pad Up
-  %(prog)s --button LStick,RStick  Press both sticks
-  %(prog)s --list                  List all button names
-  %(prog)s --stick-left 255 128    Left stick full right
-  %(prog)s --button A --auto        Hold A, also cycle all buttons
+  %(prog)s                              Cycle all buttons automatically
+  %(prog)s --button A                   Hold A
+  %(prog)s --button A,B,L               Hold A + B + L
+  %(prog)s --button DUp                 Press D-Pad Up
+  %(prog)s --pads 4                     Cycle buttons on 4 pads
+  %(prog)s --pads 2 --button A          Hold A on both pads
+  %(prog)s --pad-button 0:A --pad-button 1:B   Pad 0 holds A, pad 1 holds B
+  %(prog)s --list                       List all button names
+  %(prog)s --stick-left 255 128         Left stick full right
+  %(prog)s --button A --auto             Hold A, also cycle all buttons
         """,
     )
 
     parser.add_argument("--port", type=int, default=26760, help="UDP port (default: 26760)")
     parser.add_argument("--list", action="store_true", help="List all button names and exit")
+    parser.add_argument("--pads", type=int, default=1, metavar="N",
+                        help="Number of virtual pads, max 4 (default: 1)")
     parser.add_argument("--button", type=str, default="",
-                        help="Buttons to press, comma-separated (e.g. A,B,DUp)")
+                        help="Buttons for ALL pads, comma-separated (e.g. A,B,DUp)")
+    parser.add_argument("--pad-button", type=str, action="append", default=[],
+                        metavar="PAD:BTNS",
+                        help="Buttons for a specific pad (e.g. 0:A,B). Can be repeated.")
     parser.add_argument("--auto", action="store_true",
                         help="Automatically cycle through all buttons")
     parser.add_argument("--interval", type=float, default=1.5,
@@ -297,23 +335,29 @@ Examples:
             print(f"  {name:<12}  0x{bitmask:04x}  {switch_name}")
         return
 
-    # Parse buttons
+    # Parse global buttons
     args.buttons_mask = 0
     args.buttons_arg = []
     if args.button:
-        for name in args.button.split(","):
-            name = name.strip()
-            # Try case-insensitive match
-            match = None
-            for dsu_name in DSU_BUTTON:
-                if dsu_name.lower() == name.lower():
-                    match = dsu_name
-                    break
-            if match:
-                args.buttons_mask |= DSU_BUTTON[match]
-                args.buttons_arg.append(f"{match} → {DSUSWITCH[match]}")
-            else:
-                print(f"Warning: Unknown button '{name}'. Use --list to see all names.")
+        args.buttons_mask, args.buttons_arg = parse_button_names(args.button)
+
+    # Parse per-pad buttons (overrides global for specified pads)
+    args.num_pads = max(1, min(4, args.pads))
+    args.pad_buttons = [None] * args.num_pads
+    for entry in args.pad_button:
+        if ":" not in entry:
+            print(f"Warning: --pad-button format is 'PAD:BTNS', got '{entry}'. Skipping.")
+            continue
+        pad_str, btns_str = entry.split(":", 1)
+        try:
+            pid = int(pad_str)
+        except ValueError:
+            print(f"Warning: Invalid pad ID '{pad_str}'. Skipping.")
+            continue
+        if pid < 0 or pid >= args.num_pads:
+            print(f"Warning: Pad ID {pid} out of range (0-{args.num_pads - 1}). Skipping.")
+            continue
+        args.pad_buttons[pid] = parse_button_names(btns_str)
 
     # Parse stick positions
     args.stick_left_x = max(0, min(255, args.stick_left[0]))
@@ -322,7 +366,7 @@ Examples:
     args.stick_right_y = max(0, min(255, args.stick_right[1]))
 
     # If no buttons specified and no auto, default to auto mode
-    if not args.button and not args.auto:
+    if not args.button and not args.pad_button and not args.auto:
         args.auto = True
         print("[*] No button specified, defaulting to --auto mode.\n")
 
