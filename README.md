@@ -31,15 +31,81 @@ git clone Eden → sed 改 settings.h → 全平台构建
 
 ## 测试脚本
 
-`dsu_test.py` 是一个 DSU 协议测试服务器，用于验证模拟器是否正确接收按键、摇杆和体感输入。
+### dsu_server.py（推荐）
+
+可扩展的 DSU 服务器，提供简洁的 Python API，方便写自定义逻辑（如体感→按键转换）。
+
+**命令行使用：**
 
 ```bash
-python3 dsu_test.py                        # 自动循环所有按键
-python3 dsu_test.py --button A             # 按住 A
-python3 dsu_test.py --button A,B,L         # 同时按住 A + B + L
-python3 dsu_test.py --button DUp           # 按十字键上
-python3 dsu_test.py --stick-left 255 128   # 左摇杆推到最右
-python3 dsu_test.py --list                 # 列出所有按键名
+python3 dsu_server.py                        # 交互键盘模式，单手柄
+python3 dsu_server.py --pads 4               # 4 人手柄
+python3 dsu_server.py --port 26760           # 指定端口
+python3 dsu_server.py --no-keyboard          # 仅 DSU 服务，无键盘输入
+```
+
+**键盘映射（无需回车）：**
+
+| 按键 | 功能 | | 按键 | 功能 |
+|------|------|-|------|------|
+| `j` `k` `u` `i` | A B X Y | | `q` `e` | L R |
+| `z` `c` | ZL ZR | | `v` `b` | L3 R3 |
+| `w` `a` `s` `d` | 方向键 | | `↑` `↓` `←` `→` | 方向键 |
+| `m` | Minus (-) | | `p` | Plus (+) |
+| `h` | Home | | `Space` | 松开所有 |
+| `Tab` | 切换手柄 | | `:` | 输入文本命令 |
+| `Esc` | 退出 | | `?` | 显示帮助 |
+
+`: ` 文本命令：`A` `B` `ZL` `stick left 200 128` `state` `pad 1 A` `release`
+
+**扩展 API：**
+
+```python
+from dsu_server import DsuServer
+
+server = DsuServer(port=26760, num_pads=1, keyboard=False)
+
+# 按钮
+server.press("A")              # 按住 A（替换之前的按键）
+server.press("A", "B")         # 按住 A + B
+server.release()               # 松开所有按键
+server.release(pad=0)          # 松开指定手柄
+
+# 摇杆（0-255, 128=居中）
+server.stick("left", 200, 128)
+server.stick("right", 64, 192)
+
+# 体感（3 元组）
+server.motion(gyro=(0.1, 0.0, 0.0), accel=(0.0, 0.0, 1.0))
+
+# 触摸
+server.touch(500, 300, pressed=True)
+
+server.start()   # 启动，阻塞
+```
+
+**自定义逻辑示例（体感→按键）：**
+
+```python
+from dsu_server import DsuServer
+import time, threading
+
+server = DsuServer(port=26760, keyboard=False)
+
+# 在后台线程中读取传感器，转换为按键
+def motion_to_button():
+    while True:
+        gyro = read_gyro()  # 你的传感器代码
+        if gyro[0] > 0.5:
+            server.press("RIGHT")
+        elif gyro[0] < -0.5:
+            server.press("LEFT")
+        else:
+            server.release()
+        time.sleep(0.01)
+
+threading.Thread(target=motion_to_button, daemon=True).start()
+server.start()  # 主线程跑 DSU 事件循环
 ```
 
 启动后在模拟器中选 "UDP Controller" 作为输入设备即可测试。
@@ -76,7 +142,7 @@ Eden 收到包后在 `OnPadData()` 中按这个顺序逐位读取，再通过 `G
 ## 数据流
 
 ```
- DSU Server (dsu_test.py / 手机 App)         Eden 模拟器                    游戏
+ DSU Server (dsu_server.py / 手机 App)      Eden 模拟器                    游戏
  ───────────────────────────────────         ───────────                    ────
  digital_button = 1 << 13  (Circle)         OnPadData()
  pack PadData ───── UDP ────────────────→   解析 bit 13 → PadButton::Circle
