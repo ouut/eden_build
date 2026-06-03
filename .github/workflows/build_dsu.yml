@@ -2,6 +2,12 @@ name: "DSU Build"
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch/tag/commit, empty = latest master)'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -10,6 +16,7 @@ jobs:
     with:
       devel: "true"
       build-id: 'nightly'
+      ref: ${{ inputs.ref }}
     secrets: inherit
 
   release:
@@ -32,17 +39,17 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Eden DSU - Nightly"
-          tag_name: "dsu-nightly"
+          name: "Eden DSU - ${{ inputs.ref || 'latest' }}"
+          tag_name: "dsu-${{ github.run_number }}"
           prerelease: true
           make_latest: true
           files: artifacts/*
           body: |
             Eden with DSU (Cemuhook) protocol full controller support.
 
-            ## Changes
+            - **Ref**: `${{ inputs.ref || 'master (latest)' }}`
             - `enable_udp_controller` default = `true`
-            - DSU Server appears as full input device (buttons + analog + motion)
+            - DSU Server as full input device (buttons + analog + motion)
 
             ## Builds
             - **macOS** (Apple Silicon)

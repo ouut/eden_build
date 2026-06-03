@@ -11,8 +11,14 @@ on:
         description: 'Development mode (disables update checker)'
         type: string
         required: true
+      ref:
+        description: 'Git ref to build (branch, tag, or commit SHA; empty = latest master)'
+        type: string
+        required: false
+        default: ''
 
 env:
+  BUILD_REF: ${{ inputs.ref }}
   DISABLE_ARM: ${{ vars.DISABLE_ARM }}
   SCCACHE_GHA_ENABLED: "true"
   CCACHE: "true"
@@ -55,6 +61,13 @@ jobs:
 
       - name: Clone
         run: ./.ci/forgejo.sh --clone ${{ inputs.build-id }}
+
+      - name: Checkout ref
+        if: ${{ inputs.ref != '' }}
+        run: |
+          echo "Checking out ref: ${{ inputs.ref }}"
+          git -C eden fetch --all --tags
+          git -C eden checkout "${{ inputs.ref }}"
 
       - name: Patch DSU
         run: |
