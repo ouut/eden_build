@@ -11,3 +11,40 @@ jobs:
       devel: "true"
       build-id: 'nightly'
     secrets: inherit
+
+  release:
+    name: "Create Release"
+    needs: [build]
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -lhR artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Eden DSU - Nightly"
+          tag_name: "dsu-nightly"
+          prerelease: true
+          make_latest: true
+          files: artifacts/*
+          body: |
+            Eden with DSU (Cemuhook) protocol full controller support.
+
+            ## Changes
+            - `enable_udp_controller` default = `true`
+            - DSU Server appears as full input device (buttons + analog + motion)
+
+            ## Builds
+            - **macOS** (Apple Silicon)
+            - **Windows** (MinGW)
+            - **Linux** (AppImage)
