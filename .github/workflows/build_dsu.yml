@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref (branch/tag/commit, empty = latest master)'
+        description: 'Git ref — examples: v0.2.1, v0.2.0-rc2, ec2b9b0, master. Empty = latest master'
         type: string
         required: false
         default: ''
