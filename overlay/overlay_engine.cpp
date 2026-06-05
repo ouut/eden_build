@@ -213,6 +213,18 @@ int l_udp_poll(lua_State* L) {
     return 1;
 }
 
+int l_get_title_id(lua_State* L) {
+    if (!g_engine) { lua_pushinteger(L, 0); return 1; }
+    lua_pushinteger(L, static_cast<lua_Integer>(g_engine->GetProgramId()));
+    return 1;
+}
+
+int l_get_game_name(lua_State* L) {
+    if (!g_engine) { lua_pushstring(L, ""); return 1; }
+    lua_pushstring(L, g_engine->GetGameName().c_str());
+    return 1;
+}
+
 void register_bindings(lua_State* T, SlotArray* slots, int slot) {
     auto push_cclosure = [&](lua_CFunction fn) {
         lua_pushlightuserdata(T, slots);
@@ -225,8 +237,10 @@ void register_bindings(lua_State* T, SlotArray* slots, int slot) {
     lua_pushcfunction(T, l_sleep);       lua_setglobal(T, "sleep");
     lua_pushcfunction(T, l_get_button);  lua_setglobal(T, "get_button");
     lua_pushcfunction(T, l_get_stick);   lua_setglobal(T, "get_stick");
-    lua_pushcfunction(T, l_udp_bind);    lua_setglobal(T, "udp_bind");
-    lua_pushcfunction(T, l_udp_poll);    lua_setglobal(T, "udp_poll");
+    lua_pushcfunction(T, l_udp_bind);      lua_setglobal(T, "udp_bind");
+    lua_pushcfunction(T, l_udp_poll);      lua_setglobal(T, "udp_poll");
+    lua_pushcfunction(T, l_get_title_id);  lua_setglobal(T, "get_title_id");
+    lua_pushcfunction(T, l_get_game_name); lua_setglobal(T, "get_game_name");
 }
 
 } // anonymous namespace

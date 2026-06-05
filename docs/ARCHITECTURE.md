@@ -191,6 +191,8 @@ reWASD model:                         Eden Overlay equivalent:
 | `set_stick(which, x, y)` | `set_stick("left", 0.5, 0)` | Set stick position for this slot |
 | `udp_bind(port)` | `udp_bind(26760)` → bool | Start UDP listener on port (built-in, no deps) |
 | `udp_poll()` | `udp_poll()` → str or nil | Get latest received UDP payload, nil if none |
+| `get_title_id()` | `get_title_id()` → u64 | Current game title ID (0x0100...) |
+| `get_game_name()` | `get_game_name()` → str | Current game display name |
 
 ### 4.2 What You Can Build in Pure Lua
 

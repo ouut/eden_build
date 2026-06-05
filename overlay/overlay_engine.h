@@ -56,11 +56,18 @@ public:
     // Non-recursive, sorted alphabetically for deterministic slot order.
     void ScanAndLoad(const std::filesystem::path& dir);
 
+    // Set current game info. Call whenever the game changes (title switch).
+    // Lua scripts use get_title_id() / get_game_name() to decide per-game logic.
+    void SetProgramId(u64 id)       { program_id = id; }
+    void SetGameName(const std::string& n) { game_name = n; }
+
     // Called each frame. Resumes scripts whose sleep() has expired.
     void Tick(u32 dt_ms);
 
     // For internal use by Lua callbacks.
     EmulatedController* GetController() { return controller; }
+    u64        GetProgramId() const  { return program_id; }
+    std::string GetGameName() const  { return game_name; }
 
 private:
     int  AllocateSlot();
@@ -77,6 +84,8 @@ private:
     std::vector<ScriptState> scripts;
     EmulatedController* controller = nullptr;
     std::array<OverlaySlotState, MAX_OVERLAY_SOURCES>* overlay_slots = nullptr;
+    u64 program_id = 0;
+    std::string game_name;
 };
 
 } // namespace Core::HID
