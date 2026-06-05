@@ -1,0 +1,60 @@
+--- src/hid_core/frontend/emulated_controller.cpp
++++ src/hid_core/frontend/emulated_controller.cpp
+@@ -1917,7 +1917,57 @@
+             continue;
+         }
+         device->ForceUpdate();
++    }
++
++    ApplyOverlay();
++}
++
++void EmulatedController::ApplyOverlay() {
++    using namespace std::chrono;
++    const u64 now = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
++
++    u32 merged_buttons = 0;
++    f32 lx = 0, ly = 0, rx = 0, ry = 0;
++    u64 latest_left = 0, latest_right = 0;
++    bool has_left = false, has_right = false;
++
++    for (auto& slot : overlay_slots) {
++        if (!slot.active) continue;
++
++        // Staleness: 500ms without update → deactivate
++        if (now - slot.last_update > 500000) {
++            slot.active = false;
++            continue;
++        }
++
++        merged_buttons |= slot.button_mask;
++
++        if (slot.last_update > latest_left &&
++            (slot.left_x != 0.0f || slot.left_y != 0.0f)) {
++            lx = slot.left_x; ly = slot.left_y;
++            latest_left = slot.last_update;
++            has_left = true;
++        }
++        if (slot.last_update > latest_right &&
++            (slot.right_x != 0.0f || slot.right_y != 0.0f)) {
++            rx = slot.right_x; ry = slot.right_y;
++            latest_right = slot.last_update;
++            has_right = true;
++        }
+     }
++
++    // OR-merge buttons into final state
++    controller.npad_button_state.raw |= merged_buttons;
++
++    // Last-write-wins for sticks
++    if (has_left) {
++        controller.analog_stick_state.left.x = static_cast<s32>(lx * HID_JOYSTICK_MAX);
++        controller.analog_stick_state.left.y = static_cast<s32>(ly * HID_JOYSTICK_MAX);
++    }
++    if (has_right) {
++        controller.analog_stick_state.right.x = static_cast<s32>(rx * HID_JOYSTICK_MAX);
++        controller.analog_stick_state.right.y = static_cast<s32>(ry * HID_JOYSTICK_MAX);
++    }
+ }
+
+ NpadButton EmulatedController::GetTurboButtonMask() const {
