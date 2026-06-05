@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,10 @@ public:
 
     // Hot-reload all loaded scripts.
     void ReloadAll();
+
+    // Scan a directory and load all .lua files. Each gets its own slot.
+    // Non-recursive, sorted alphabetically for deterministic slot order.
+    void ScanAndLoad(const std::filesystem::path& dir);
 
     // Called each frame. Resumes scripts whose sleep() has expired.
     void Tick(u32 dt_ms);

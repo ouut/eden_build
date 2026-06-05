@@ -187,7 +187,10 @@ reWASD model:                         Eden Overlay equivalent:
 | `release(name)` | `release("A")` | Release button in this script's slot |
 | `sleep(ms)` | `sleep(100)` | Yield coroutine for N milliseconds |
 | `get_button(name)` | `get_button("A")` → bool | Read FINAL button state (after merge) |
+| `get_stick(which)` | `x, y = get_stick("left")` → f32, f32 | Read FINAL stick state (after merge), range [-1, 1] |
 | `set_stick(which, x, y)` | `set_stick("left", 0.5, 0)` | Set stick position for this slot |
+| `udp_bind(port)` | `udp_bind(26760)` → bool | Start UDP listener on port (built-in, no deps) |
+| `udp_poll()` | `udp_poll()` → str or nil | Get latest received UDP payload, nil if none |
 
 ### 4.2 Button Names
 

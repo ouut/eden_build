@@ -1,8 +1,23 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Overlay Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <thread>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+using socklen_t = int;
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#define closesocket close
+#endif
 
 #include "common/logging.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -53,6 +68,74 @@ u32 GetButtonBit(const std::string& name) {
 using SlotArray = std::array<OverlaySlotState, MAX_OVERLAY_SOURCES>;
 OverlayEngine* g_engine = nullptr;
 
+// ---- UDP bridge ----
+// Global buffer + listener thread. Lua calls udp_bind(port) then
+// udp_poll() each frame.  No external dependencies required.
+struct UdpBridge {
+    std::mutex mtx;
+    std::string buf;          // latest received payload
+    bool       fresh = false; // true = new data since last poll
+    int        fd  = -1;
+    std::atomic<bool> running{false};
+    std::thread worker;
+
+    void start(u16 port) {
+        if (running.load()) return;
+#ifdef _WIN32
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) return;
+#endif
+        fd = static_cast<int>(::socket(AF_INET, SOCK_DGRAM, 0));
+        if (fd < 0) return;
+#ifdef _WIN32
+        u_long mode = 1; ioctlsocket(fd, FIONBIO, &mode);
+#else
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(port);
+        if (bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+            closesocket(fd); fd = -1; return;
+        }
+        running.store(true);
+        worker = std::thread([this] {
+            char tmp[4096];
+            while (running.load()) {
+                int n = static_cast<int>(
+                    recvfrom(fd, tmp, sizeof(tmp), 0, nullptr, nullptr));
+                if (n > 0) {
+                    std::lock_guard lk(mtx);
+                    buf.assign(tmp, static_cast<std::size_t>(n));
+                    fresh = true;
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+        });
+    }
+
+    void stop() {
+        running.store(false);
+        if (worker.joinable()) worker.join();
+        if (fd >= 0) { closesocket(fd); fd = -1; }
+#ifdef _WIN32
+        WSACleanup();
+#endif
+    }
+
+    // Move latest data out. Returns empty string if nothing new.
+    std::string take() {
+        std::lock_guard lk(mtx);
+        if (!fresh) return {};
+        fresh = false;
+        return std::move(buf);
+    }
+};
+static UdpBridge g_udp;
+
 // ---- Lua C callbacks ----
 
 int l_press(lua_State* L) {
@@ -99,17 +182,51 @@ int l_get_button(lua_State* L) {
     return 1;
 }
 
+int l_get_stick(lua_State* L) {
+    if (!g_engine || !g_engine->GetController()) {
+        lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2;
+    }
+    const char* which = luaL_checkstring(L, 1);
+    auto sticks = g_engine->GetController()->GetSticks();
+    f32 x = 0, y = 0;
+    auto norm = [](s32 v) { return static_cast<f32>(v) / static_cast<f32>(HID_JOYSTICK_MAX); };
+    if (std::strcmp(which, "left") == 0)
+        { x = norm(sticks.left.x); y = norm(sticks.left.y); }
+    else if (std::strcmp(which, "right") == 0)
+        { x = norm(sticks.right.x); y = norm(sticks.right.y); }
+    lua_pushnumber(L, x); lua_pushnumber(L, y);
+    return 2;
+}
+
+int l_udp_bind(lua_State* L) {
+    u16 port = static_cast<u16>(luaL_checkinteger(L, 1));
+    g_udp.stop(); // close previous if any
+    g_udp.start(port);
+    lua_pushboolean(L, g_udp.running.load());
+    return 1;
+}
+
+int l_udp_poll(lua_State* L) {
+    auto data = g_udp.take();
+    if (data.empty()) { lua_pushnil(L); return 1; }
+    lua_pushlstring(L, data.data(), data.size());
+    return 1;
+}
+
 void register_bindings(lua_State* T, SlotArray* slots, int slot) {
     auto push_cclosure = [&](lua_CFunction fn) {
         lua_pushlightuserdata(T, slots);
         lua_pushinteger(T, slot);
         lua_pushcclosure(T, fn, 2);
     };
-    push_cclosure(l_press);    lua_setglobal(T, "press");
-    push_cclosure(l_release);  lua_setglobal(T, "release");
-    push_cclosure(l_set_stick); lua_setglobal(T, "set_stick");
-    lua_pushcfunction(T, l_sleep);      lua_setglobal(T, "sleep");
-    lua_pushcfunction(T, l_get_button); lua_setglobal(T, "get_button");
+    push_cclosure(l_press);      lua_setglobal(T, "press");
+    push_cclosure(l_release);    lua_setglobal(T, "release");
+    push_cclosure(l_set_stick);  lua_setglobal(T, "set_stick");
+    lua_pushcfunction(T, l_sleep);       lua_setglobal(T, "sleep");
+    lua_pushcfunction(T, l_get_button);  lua_setglobal(T, "get_button");
+    lua_pushcfunction(T, l_get_stick);   lua_setglobal(T, "get_stick");
+    lua_pushcfunction(T, l_udp_bind);    lua_setglobal(T, "udp_bind");
+    lua_pushcfunction(T, l_udp_poll);    lua_setglobal(T, "udp_poll");
 }
 
 } // anonymous namespace
@@ -118,6 +235,7 @@ void register_bindings(lua_State* T, SlotArray* slots, int slot) {
 
 OverlayEngine::OverlayEngine()  { g_engine = this; }
 OverlayEngine::~OverlayEngine() {
+    g_udp.stop();
     if (L) lua_close(static_cast<lua_State*>(L));
     g_engine = nullptr;
 }
@@ -231,6 +349,27 @@ void OverlayEngine::ReloadAll() {
     for (auto& s : scripts) ReleaseSlot(s.slot);
     scripts.clear();
     for (auto& p : paths) LoadScript(p);
+}
+
+void OverlayEngine::ScanAndLoad(const std::filesystem::path& dir) {
+    if (!std::filesystem::is_directory(dir)) {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec) {
+            LOG_ERROR(Input, "Overlay: cannot create dir {}: {}", dir.string(), ec.message());
+            return;
+        }
+        LOG_INFO(Input, "Overlay: created scripts directory: {}", dir.string());
+    }
+    // Collect .lua files, sorted for deterministic slot order
+    std::vector<std::string> files;
+    for (auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".lua")
+            files.push_back(entry.path().string());
+    }
+    std::sort(files.begin(), files.end());
+    for (auto& f : files)
+        LoadScript(f);
 }
 
 void OverlayEngine::Tick(u32 dt_ms) {
