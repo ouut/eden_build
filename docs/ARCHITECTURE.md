@@ -192,13 +192,38 @@ reWASD model:                         Eden Overlay equivalent:
 | `udp_bind(port)` | `udp_bind(26760)` → bool | Start UDP listener on port (built-in, no deps) |
 | `udp_poll()` | `udp_poll()` → str or nil | Get latest received UDP payload, nil if none |
 
-### 4.2 Button Names
+### 4.2 What You Can Build in Pure Lua
+
+Lua scripts have access to the full input pipeline — read physical input,
+read overlay input, write to their own slot, receive external data via UDP.
+All from within a coroutine that never blocks the emulator.
+
+**Read state (final merged):**
+- `get_button("L")` — is L being pressed right now? (user OR overlay)
+- `x, y = get_stick("left")` — where is the left stick pointing?
+
+**Write to own slot:**
+- `press("A")` / `release("A")` — add / remove a button from this slot's mask
+- `set_stick("left", x, y)` — set stick position for this slot
+
+**Control flow:**
+- `sleep(ms)` — pause this coroutine, other scripts keep running
+
+**External input:**
+- `udp_bind(port)` — open a UDP port (background thread, non-blocking)
+- `udp_poll()` → data — grab the latest packet, or nil
+
+Everything composes. A single frame can merge physical controller A +
+turbo_attack.lua pressing A + udp_remote.lua pressing B, with each script
+also reading the merged state to make its own decisions.
+
+### 4.3 Button Names
 
 `A`, `B`, `X`, `Y`, `L`, `R`, `ZL`, `ZR`, `Plus`, `Minus`,
 `DUp`, `DDown`, `DLeft`, `DRight`, `LStick`, `RStick`,
 `SLLeft`, `SLRight`, `SRLeft`, `SRRight`
 
-### 4.3 Script Template
+### 4.4 Script Template
 
 ```lua
 -- Script runs as an infinite loop
