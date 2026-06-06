@@ -1,4 +1,4 @@
-# Eden Overlay — Architecture Document
+# Eden Overlay — Architecture
 
 ## 1. Eden's Original Input Architecture
 
@@ -17,54 +17,45 @@ InputDevice (created from ParamPackage via factory)
 EmulatedController
     │  button_values[N] = { value, uuid }   ← ONE value per button
     │  stick_values[N]  = { x, y, uuid }    ← ONE value per stick
+    │  motion_state[0/1] = { gyro, accel }  ← ONE value per joycon
     ▼
 HID service (npad.cpp)
-    │  controller.device->GetNpadButtons()
+    │  controller.device->GetNpadButtons(), GetSticks(), GetMotions()
     ▼
 Game
 ```
 
 ### 1.2 The UUID Ownership Problem
 
-Each button (`ButtonStatus` in `common/input.h`) stores exactly ONE `value` and ONE `uuid`:
+Each button stores exactly ONE `value` and ONE `uuid`:
 
 ```cpp
 struct ButtonStatus {
     Common::UUID uuid{};   // who wrote last
-    bool value{};          // current state (only one!)
+    bool value{};          // current state
     bool toggle{};
     bool turbo{};
     bool locked{};
 };
 ```
 
-When multiple input sources write to the same button, UUID arbitration decides who wins:
+Multiple sources writing to the same button → UUID arbitration decides who wins:
 
-```
-SetButton logic (emulated_controller.cpp:774-779):
-
+```cpp
+// SetButton logic (emulated_controller.cpp):
 if (current.uuid != incoming.uuid) {
-    if (!incoming.value) {
-        return;  // release from non-owner → ignored
-    }
+    if (!incoming.value) return;  // release from non-owner → ignored
 }
-// press from anyone → steal ownership
-current.uuid = incoming.uuid;
+current.uuid = incoming.uuid;     // press from anyone → steal ownership
 current.value = incoming.value;
 ```
 
-**Design intent**: One player uses multiple physical devices (keyboard + mouse + gamepad)
-mapped to different buttons of a single emulated controller. UUID prevents crosstalk
-between devices.
+**What this can't do**: Two independent sources controlling the SAME button
+simultaneously (e.g., user press + script press). UUID forces mutual exclusion.
 
-**What it can't do**: Two independent intent sources controlling the SAME button
-simultaneously (e.g., user hand + UDP remote input). The single-value model forces
-mutual exclusion.
+### 1.3 Existing Workarounds
 
-### 1.3 Existing Multi-Source Attempts
-
-Eden already has TAS and Virtual Gamepad — two overlay-like systems that work
-around UUID via special hardcoded UUIDs:
+Eden has TAS and Virtual Gamepad — hardcoded UUIDs that coexist but still steal ownership:
 
 | System | UUID | Purpose |
 |--------|------|---------|
@@ -72,212 +63,237 @@ around UUID via special hardcoded UUIDs:
 | TAS | TAS_UUID | Record/playback |
 | Virtual Gamepad | VIRTUAL_UUID | Remote control |
 
-These coexist by using their own UUIDs, but they still **steal ownership**
-from each other. Press A from TAS → TAS owns A. Press A from user → user steals
-it back. No true merging.
+Press A from TAS → TAS owns A. Press A from user → user steals it back. No true merging.
 
 ---
 
-## 2. What We Changed
+## 2. Solution: Per-Slot State + Final Merge
 
-### 2.1 New Files
+### 2.1 Core Idea
 
-| File | Purpose |
-|------|---------|
-| `overlay/overlay_types.h` | `OverlaySlotState` struct — per-source input slot |
-| `overlay/overlay_engine.h` | `OverlayEngine` class — Lua VM + script management |
-| `overlay/overlay_engine.cpp` | Implementation: Lua bindings, coroutine execution |
-| `lua/examples/*.lua` | Example scripts for auto-potion, turbo, combo macros |
-
-### 2.2 Modified Files (via patch)
-
-| File | Change | Lines |
-|------|--------|-------|
-| `emulated_controller.h` | Add `#include overlay_types.h` | +1 |
-| | Add `void ApplyOverlay()` method | +3 |
-| | Add `std::array<OverlaySlotState, 8> overlay_slots` member | +2 |
-| `emulated_controller.cpp` | Call `ApplyOverlay()` at end of `StatusUpdate()` | +1 |
-| | Implement `ApplyOverlay()` (~40 lines) | +40 |
-| `hid_core/CMakeLists.txt` | Add overlay source files | +3 |
-
-**Total C++ change: ~50 lines modified, ~130 lines new**
-
-### 2.3 New Architecture
+Instead of fighting UUID, overlay writes to **separate slots**. At end of each frame,
+`ApplyOverlay()` merges all active slots into the final controller state.
 
 ```
-Physical Input (unchanged)
+Physical Input (SetButton → button_values, stick_values, motion_state)
     │
     ▼
 EmulatedController (minimally modified)
     │
-    ├── normal path: callback → SetButton → npad_button_state (unchanged)
+    ├── normal path: SetButton → npad_button_state (unchanged)
     │
-    ├── overlay path: OverlayEngine → overlay_slots[N] (new)
-    │       ▲
-    │       │  press("A"), sleep(ms), ...
-    │   Lua scripts (per-script coroutine, per-script slot)
+    ├── overlay path:  OverlayEngine → overlay_slots[0..7] (new)
     │
     └── StatusUpdate():
-          turbo processing (unchanged)
-          motion force-update (unchanged)
-          ApplyOverlay():  ← NEW — one call at the end
-            for each active overlay slot:
-              npad_button_state.raw |= slot.button_mask
-              // sticks: last-write-wins by timestamp
+          turbo + motion force-update (unchanged)
+          ApplyOverlay():          ← NEW — one call, end of frame
+            for each active slot:
+              buttons: OR-merge
+              sticks:  last-write-wins by timestamp
+              motion:  last-write-wins by timestamp
 ```
 
-### 2.4 Merge Logic
-
-**Buttons**: OR-merge. If ANY source presses a button, it stays pressed.
-Each source is responsible for its own press/release lifecycle.
-Two sources pressing the same button simultaneously works correctly.
-
-**Sticks**: Last-write-wins by timestamp. If two overlay sources set the left
-stick, the most recently written value takes effect. If no overlay source
-has stick data, the normal (physical) stick value is preserved.
-
-**Motion**: Not handled by overlay. Physical motion input passes through unchanged.
-
-**Staleness**: Slots inactive for >500ms are automatically deactivated.
-
-### 2.5 Multi-Player Management
-
-Each `OverlayEngine` binds to exactly one `EmulatedController` (one player).
-For multiple players, create one engine per controller — no C++ changes needed:
+### 2.2 OverlaySlotState
 
 ```cpp
-// HID service layer initialization
-std::array<OverlayEngine, 2> engines;  // one per player
-
-for (size_t i = 0; i < 2; i++) {
-    auto& ctrl = *controllers[i];
-    engines[i].RegisterController(&ctrl, ctrl.overlay_slots);
-    engines[i].ScanAndLoad("./overlay_scripts/p" + std::to_string(i + 1));
-}
-
-// Per-frame tick
-for (auto& eng : engines) eng.Tick(dt_ms);
+struct OverlaySlotState {
+    u32 button_mask{0};          // OR-merged
+    f32 left_x{0},  left_y{0};   // last-write-wins
+    f32 right_x{0}, right_y{0};
+    f32 left_gyro_x{0}, ..., left_accel_z{0};   // 6 values × 2 joycons
+    f32 right_gyro_x{0}, ..., right_accel_z{0};
+    u64 last_update{0};          // timestamp for staleness + last-write-wins
+    bool active{false};
+};
 ```
 
-Each script only affects the player whose engine loaded it — the `press`/`release`
-bindings are per-engine via upvalues, so there's no cross-player interference.
+Max 8 slots. Each Lua handle (`player.new` / `player.new_udp` / `player.new_script`)
+occupies one slot. Slots are independent.
 
-```
-overlay_scripts/
-├── p1/
-│   ├── turbo_attack.lua    → Player 1 only
-│   └── combo_macro.lua
-└── p2/
-    └── auto_potion.lua     → Player 2 only
-```
+### 2.3 Merge Logic
+
+**Buttons**: OR-merge. If ANY slot sets a button bit, it stays pressed.
+Each script manages its own press/release lifecycle within its slot.
+
+**Sticks**: Last-write-wins by `last_update` timestamp. Non-zero check prevents
+zero-overwrite when a slot hasn't set a stick.
+
+**Motion**: Same last-write-wins as sticks. Left/right joycons tracked independently.
+Non-zero check across all 6 components (gyro x/y/z + accel x/y/z).
+
+**Staleness**: Slot without update for >500ms → auto-deactivated.
 
 ---
 
-## 3. What This Achieves
+## 3. Multi-Player: Global Engine Registry
 
-### 3.1 reWASD-Style Multi-Source Composition
+### 3.1 Architecture
 
 ```
-reWASD model:                         Eden Overlay equivalent:
-                                      
-  phys keyboard W ──┐                  normal path (SDL/Joycon)
-  phys controller B ─┤                   │
-  virtual macro    ──┤                  overlay slot 0 (Lua script 1)
-                      ├→ virtual pad    overlay slot 1 (Lua script 2)
-  All sources write    │                overlay slot 2 (UDP remote)
-  independently.       │                  │
-  Final = OR(active)   │                ApplyOverlay():
-                       │                  final = normal | slot0 | slot1 | slot2
+  Lua side (main.lua):
+    p = player.new(1)  →  routes to engine[0], writes to controller[0] slot
+    p = player.new(2)  →  routes to engine[1], writes to controller[1] slot
+
+  C++ side:
+    std::map<int, OverlayEngine*> g_engines;
+    // player_id → OverlayEngine* (mutex-protected)
 ```
 
-### 3.2 Use Cases Enabled
+`player_id` is always explicit. No implicit "current player." Each
+`OverlayEngine` binds to exactly one `EmulatedController`. Lua reaches
+any player via `player:held(id, btn)`, `player:axis(id, stick)`, etc.
 
-- **Turbo / auto-fire**: A Lua script that repeatedly presses A while user holds L
-- **Auto-potion**: Periodically presses X for health recovery
-- **Combo macros**: D-pad + stick triggers a sequence of button presses
-- **UDP remote input**: External DSU data injected into overlay slots
-- **AI agent input**: Any external system can write to an overlay slot
+### 3.2 Per-Player Setup
 
-### 3.3 Design Properties
+```cpp
+// HID service layer
+auto& engine = engines[player_id];
+engine.RegisterController(player_id, &controller, controller.overlay_slots);
+engine.SetProgramId(title_id);
+engine.SetGameName(name);
+// engine.Tick(dt_ms) called each frame
+```
 
-- **Zero overhead when idle**: No scripts loaded → no overlay slots active → ApplyOverlay is a no-op
-- **Hot-reload**: Scripts can be reloaded without restarting the emulator
-- **Sandboxed**: Each script runs in its own Lua coroutine, cannot interfere with other scripts
-- **Minimal patch surface**: Changes are confined to 2 functions in emulated_controller
-- **Non-breaking**: All existing input mappings continue to work unchanged
+Each engine owns one `lua_State*`. The first engine to register initializes
+the Lua environment (creates `player`, `game` tables, handle metatable).
+All engines share the global registry for cross-player access.
 
 ---
 
-## 4. Lua Script API
+## 4. Lua Runtime
 
-### 4.1 Functions
+### 4.1 Object Model
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `press(name)` | `press("A")` | Hold button in this script's slot |
-| `release(name)` | `release("A")` | Release button in this script's slot |
-| `sleep(ms)` | `sleep(100)` | Yield coroutine for N milliseconds |
-| `get_button(name)` | `get_button("A")` → bool | Read FINAL button state (after merge) |
-| `get_stick(which)` | `x, y = get_stick("left")` → f32, f32 | Read FINAL stick state (after merge), range [-1, 1] |
-| `set_stick(which, x, y)` | `set_stick("left", 0.5, 0)` | Set stick position for this slot |
-| `udp_bind(port)` | `udp_bind(26760)` → bool | Start UDP listener on port (built-in, no deps) |
-| `udp_poll()` | `udp_poll()` → str or nil | Get latest received UDP payload, nil if none |
-| `get_title_id()` | `get_title_id()` → u64 | Current game title ID (0x0100...) |
-| `get_game_name()` | `get_game_name()` → str | Current game display name |
+```
+player = module (factory + read)
+  ├── player.new(id, [slot])       → handle (manual input)
+  ├── player.new_udp(id, port, [slot]) → handle (UDP source)
+  ├── player.new_script(id, path, [slot]) → handle (Lua coroutine)
+  ├── player:held(id, btn)         → bool
+  ├── player:axis(id, which)       → x, y
+  └── player:motion(id, which)     → gx,gy,gz,ax,ay,az
 
-### 4.2 What You Can Build in Pure Lua
+handle = userdata (metatable: "OverlayHandle")
+  ├── h:press(btn)
+  ├── h:release(btn)
+  ├── h:move(which, x, y)
+  ├── h:motion(which, gx,gy,gz,ax,ay,az)
+  ├── h:wait(ms)                  -- yield coroutine
+  ├── h:recv() → string or nil    -- UDP only
+  └── h:kill()                    -- release slot, stop UDP thread
 
-Lua scripts have access to the full input pipeline — read physical input,
-read overlay input, write to their own slot, receive external data via UDP.
-All from within a coroutine that never blocks the emulator.
+game = table
+  ├── game:id()   → u64
+  └── game:name() → string
 
-**Read state (final merged):**
-- `get_button("L")` — is L being pressed right now? (user OR overlay)
-- `x, y = get_stick("left")` — where is the left stick pointing?
+wait(ms)  -- global coroutine yield
+```
 
-**Write to own slot:**
-- `press("A")` / `release("A")` — add / remove a button from this slot's mask
-- `set_stick("left", x, y)` — set stick position for this slot
+### 4.2 Coroutine Model
 
-**Control flow:**
-- `sleep(ms)` — pause this coroutine, other scripts keep running
-
-**External input:**
-- `udp_bind(port)` — open a UDP port (background thread, non-blocking)
-- `udp_poll()` → data — grab the latest packet, or nil
-
-Everything composes. A single frame can merge physical controller A +
-turbo_attack.lua pressing A + udp_remote.lua pressing B, with each script
-also reading the merged state to make its own decisions.
-
-### 4.3 Button Names
-
-`A`, `B`, `X`, `Y`, `L`, `R`, `ZL`, `ZR`, `Plus`, `Minus`,
-`DUp`, `DDown`, `DLeft`, `DRight`, `LStick`, `RStick`,
-`SLLeft`, `SLRight`, `SRLeft`, `SRRight`
-
-### 4.4 Script Template
+`player.new_script(id, path)` loads a Lua file into a new coroutine:
 
 ```lua
--- Script runs as an infinite loop
+-- Script file (e.g., turbo.lua)
+-- Gets globals pre-bound to its slot:
+--   press(btn), release(btn), move(which, x, y)
+--   motion(which, gx,gy,gz,ax,ay,az), wait(ms)
+
 while true do
-    press("A")
-    sleep(50)
-    release("A")
-    sleep(100)
+    if player:held(1, "L") then
+        press("A")
+        wait(50)
+        release("A")
+        wait(50)
+    end
+    wait(16)
 end
 ```
 
+`wait(ms)` yields the coroutine. `OverlayEngine::Tick(dt_ms)` resumes coroutines
+whose sleep has expired. If a coroutine exits (returns instead of yielding),
+it's automatically wrapped in `while true do ... wait(0) end`.
+
+### 4.3 UDP Bridge
+
+`player.new_udp(id, port)` creates a handle with a background thread:
+
+```
+Lua:  u = player.new_udp(1, 26760)
+C++:  UdpState { socket, worker thread, buffer, fresh flag }
+
+Lua:  data = u:recv()   →  newest packet or nil
+C++:  UdpState::take()  →  atomically swap buffer
+```
+
+The worker thread runs `recvfrom()` in a loop, storing the latest packet.
+`u:recv()` drains the buffer. No Lua dependencies, no blocking.
+
+### 4.4 Script Exit Behavior
+
+If a script loaded by `new_script` returns (instead of yielding forever):
+
+```lua
+-- This returns after one iteration → engine wraps it
+for i = 1, 3 do
+    press("A"); wait(50); release("A"); wait(50)
+end
+-- Implicit return → engine wraps in: while true do loadfile(path) wait(0) end
+```
+
 ---
 
-## 5. Build Integration
+## 5. Files Changed
 
-The overlay uses Lua 5.4 (or LuaJIT) with its C API. No additional C++
-dependencies beyond `liblua`. The `apply_overlay.sh` script:
+### 5.1 New Files
 
-1. Copies `overlay_*.{h,cpp}` into `eden/src/hid_core/frontend/`
-2. Applies patches to `emulated_controller.{h,cpp}`
-3. Adds overlay sources to `hid_core/CMakeLists.txt`
-4. Verifies Lua headers are available
+| File | Purpose |
+|------|---------|
+| `overlay/overlay_types.h` | `OverlaySlotState` struct |
+| `overlay/overlay_engine.h` | `OverlayEngine` class |
+| `overlay/overlay_engine.cpp` | Lua bindings, coroutine engine, UDP bridge, global registry |
+| `lua/examples/*.lua` | 8 example scripts covering all API |
 
-GitHub Actions clones Eden source, runs `apply_overlay.sh`, then builds normally.
+### 5.2 Patched Files
+
+| File | Change |
+|------|--------|
+| `emulated_controller.h` | `#include overlay_types.h`, `ApplyOverlay()`, `overlay_slots` member |
+| `emulated_controller.cpp` | Call `ApplyOverlay()` at end of `StatusUpdate()`, implement ~70-line merge function |
+| `cpmfile.json` | Add Lua v5.4.7 dependency |
+| `externals/CMakeLists.txt` | Build Lua as static library via CPM |
+| `hid_core/CMakeLists.txt` | Add overlay sources, link `lua` |
+
+**Total C++ change: ~100 lines new, ~55 lines patched**
+
+### 5.3 Build Integration
+
+```bash
+./scripts/apply_overlay.sh /path/to/eden/source
+```
+
+Applies 5 patches (`emulated_controller.h`, `emulated_controller.cpp`,
+`cpmfile.json`, `externals/CMakeLists.txt`, `hid_core/CMakeLists.txt`)
+and copies overlay source files. Lua is fetched via CPM (v5.4.7, SHA512
+verified), built as static library, linked into `hid_core`.
+
+---
+
+## 6. What This Enables
+
+- **Turbo / auto-fire**: Script repeatedly presses A while user holds L
+- **Auto-potion**: Periodically presses X for health recovery
+- **Combo macros**: Stick + button combos, direction-triggered sequences
+- **Motion aim assist**: Read gyro, write counter-motion, nudge sticks
+- **UDP remote input**: Custom protocol over UDP, 24-byte packet format
+- **Per-game profiles**: `game:id()` / `game:name()` for game-specific logic
+- **Cross-player coordination**: `player:held(2, "A")` to read another player
+
+### Design Properties
+
+- **Zero overhead when idle**: No scripts → no active slots → ApplyOverlay no-op
+- **Hot-reload**: Scripts reloaded without restarting emulator
+- **Sandboxed**: Each script in its own coroutine, cannot interfere with others
+- **Minimal C++**: All logic in Lua; C++ is pure transport + merge
+- **Non-breaking**: Existing input mappings continue to work unchanged
+- **Last-write-wins**: Multiple slots writing same field → timestamp arbitration
