@@ -14,7 +14,7 @@
      void StatusUpdate();
 +
 +    /// Apply overlay input sources to the final controller state (OR-merge buttons,
-+    /// last-write-wins sticks)
++    /// last-write-wins sticks and motion)
 +    void ApplyOverlay();
 +
 +    // Overlay source slots — written by OverlayEngine, read by ApplyOverlay

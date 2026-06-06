@@ -4,7 +4,7 @@
 #pragma once
 
 #include <array>
-#include <filesystem>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,76 +15,80 @@ namespace Core::HID {
 
 class EmulatedController;
 
-// Lua-powered overlay input engine.
+// Lua-powered overlay input engine — one per EmulatedController (player).
 //
-// Each loaded Lua script runs in its own coroutine and owns one OverlaySlotState.
-// Multiple scripts can control the same buttons simultaneously — their masks are
-// OR-merged at apply time. This gives reWASD-style multi-source composition.
+// Public Lua API (see CLAUDE.md):
+//   p = player.new(id [, slot])        → handle
+//   u = player.new_udp(id, port [, slot]) → handle
+//   s = player.new_script(id, path [, slot]) → handle
+//   player:held(id, btn) → bool
+//   player:axis(id, stick) → x,y
+//   player:motion(id, stick) → gx,gy,gz,ax,ay,az
+//   game:id() → u64    game:name() → str
+//   wait(ms)
 //
-// Usage:
-//   OverlayEngine engine;
-//   engine.RegisterController(&controller, controller.overlay_slots);
-//   engine.LoadScript("scripts/turbo_attack.lua");
-//   // ... each frame ...
-//   engine.Tick(dt_ms);
-//   // controller.ApplyOverlay() is called inside StatusUpdate
+// Handle methods:
+//   h:press(btn)   h:release(btn)   h:move(which, x, y)
+//   h:motion(which, gx,gy,gz,ax,ay,az)   h:wait(ms)   h:kill()
 class OverlayEngine {
 public:
     OverlayEngine();
     ~OverlayEngine();
 
-    // Bind to an EmulatedController and its overlay slots array.
-    // Must be called before LoadScript().
-    void RegisterController(EmulatedController* controller,
+    OverlayEngine(const OverlayEngine&) = delete;
+    OverlayEngine& operator=(const OverlayEngine&) = delete;
+
+    // ---- C++ integration (called by HID service layer) ----
+
+    // Bind this engine to a controller & its slots. Sets player_id from controller.
+    void RegisterController(int player_id, EmulatedController* controller,
                             std::array<OverlaySlotState, MAX_OVERLAY_SOURCES>& slots);
 
-    // Load a Lua script. Returns true on success.
-    // Auto-allocates a free slot.
-    bool LoadScript(const std::string& path);
-
-    // Load a script into a specific slot. Returns false if slot is occupied.
-    bool LoadScriptToSlot(const std::string& path, int slot);
-
-    // Unload a script by path.
-    void UnloadScript(const std::string& path);
-
-    // Hot-reload all loaded scripts.
-    void ReloadAll();
-
-    // Scan a directory and load all .lua files. Each gets its own slot.
-    // Non-recursive, sorted alphabetically for deterministic slot order.
-    void ScanAndLoad(const std::filesystem::path& dir);
-
-    // Set current game info. Call whenever the game changes (title switch).
-    // Lua scripts use get_title_id() / get_game_name() to decide per-game logic.
+    // Set current game info. Call when game changes.
     void SetProgramId(u64 id)       { program_id = id; }
     void SetGameName(const std::string& n) { game_name = n; }
 
-    // Called each frame. Resumes scripts whose sleep() has expired.
+    // Called each frame. Resumes coroutines whose sleep() has expired.
     void Tick(u32 dt_ms);
 
-    // For internal use by Lua callbacks.
-    EmulatedController* GetController() { return controller; }
-    u64        GetProgramId() const  { return program_id; }
-    std::string GetGameName() const  { return game_name; }
+    // ---- Internal use by Lua callbacks ----
 
-private:
+    EmulatedController* GetController() const { return controller; }
+    u64  GetProgramId()   const { return program_id; }
+    std::string GetGameName() const { return game_name; }
+    int  GetPlayerId()    const { return player_id; }
+
+    std::array<OverlaySlotState, MAX_OVERLAY_SOURCES>& overlay_slots_ref() { return *overlay_slots; }
+    std::vector<ScriptState>& scripts_ref() { return scripts; }
+    void* get_lua_state() { return L; }
+
     int  AllocateSlot();
     void ReleaseSlot(int slot);
 
-    struct ScriptState {
-        std::string path;
-        int  slot    = -1;   // index into overlay_slots
-        int  wake_ms = 0;     // remaining sleep time
-        int  thread_ref = -1; // Lua registry ref for the lua_State* thread
-    };
+    // Load a script file into a coroutine in the given slot.
+    bool LoadScriptToSlot(const std::string& path, int slot);
 
+    // ---- Global engine registry (for cross-player Lua access) ----
+
+    static void RegisterGlobal(int player_id, OverlayEngine* engine);
+    static void UnregisterGlobal(int player_id);
+    static OverlayEngine* FindGlobal(int player_id);
+
+private:
     void* L = nullptr;  // lua_State*
-    std::vector<ScriptState> scripts;
     EmulatedController* controller = nullptr;
     std::array<OverlaySlotState, MAX_OVERLAY_SOURCES>* overlay_slots = nullptr;
+    int player_id = 0;
     u64 program_id = 0;
     std::string game_name;
+
+    struct ScriptState {
+        std::string path;
+        int  slot    = -1;
+        int  wake_ms = 0;
+        int  thread_ref = -1;
+    };
+    std::vector<ScriptState> scripts;
 };
 
 } // namespace Core::HID

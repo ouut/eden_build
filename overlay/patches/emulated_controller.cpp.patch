@@ -1,6 +1,6 @@
 --- src/hid_core/frontend/emulated_controller.cpp
 +++ src/hid_core/frontend/emulated_controller.cpp
-@@ -1917,7 +1917,57 @@
+@@ -1917,7 +1917,84 @@
              continue;
          }
          device->ForceUpdate();
@@ -17,11 +17,15 @@
 +    f32 lx = 0, ly = 0, rx = 0, ry = 0;
 +    u64 latest_left = 0, latest_right = 0;
 +    bool has_left = false, has_right = false;
++    u64 latest_left_motion = 0, latest_right_motion = 0;
++    bool has_left_motion = false, has_right_motion = false;
++    f32 lgx=0, lgy=0, lgz=0, lax=0, lay=0, laz=0;
++    f32 rgx=0, rgy=0, rgz=0, rax=0, ray=0, raz=0;
 +
 +    for (auto& slot : overlay_slots) {
 +        if (!slot.active) continue;
 +
-+        // Staleness: 500ms without update → deactivate
++        // Staleness: 500ms without update -> deactivate
 +        if (now - slot.last_update > 500000) {
 +            slot.active = false;
 +            continue;
@@ -41,6 +45,24 @@
 +            latest_right = slot.last_update;
 +            has_right = true;
 +        }
++
++        // Motion left
++        if (slot.last_update > latest_left_motion &&
++            (slot.left_gyro_x != 0.0f || slot.left_gyro_y != 0.0f || slot.left_gyro_z != 0.0f ||
++             slot.left_accel_x != 0.0f || slot.left_accel_y != 0.0f || slot.left_accel_z != 0.0f)) {
++            lgx = slot.left_gyro_x; lgy = slot.left_gyro_y; lgz = slot.left_gyro_z;
++            lax = slot.left_accel_x; lay = slot.left_accel_y; laz = slot.left_accel_z;
++            latest_left_motion = slot.last_update;
++            has_left_motion = true;
++        }
++        if (slot.last_update > latest_right_motion &&
++            (slot.right_gyro_x != 0.0f || slot.right_gyro_y != 0.0f || slot.right_gyro_z != 0.0f ||
++             slot.right_accel_x != 0.0f || slot.right_accel_y != 0.0f || slot.right_accel_z != 0.0f)) {
++            rgx = slot.right_gyro_x; rgy = slot.right_gyro_y; rgz = slot.right_gyro_z;
++            rax = slot.right_accel_x; ray = slot.right_accel_y; raz = slot.right_accel_z;
++            latest_right_motion = slot.last_update;
++            has_right_motion = true;
++        }
      }
 +
 +    // OR-merge buttons into final state
@@ -54,6 +76,24 @@
 +    if (has_right) {
 +        controller.analog_stick_state.right.x = static_cast<s32>(rx * HID_JOYSTICK_MAX);
 +        controller.analog_stick_state.right.y = static_cast<s32>(ry * HID_JOYSTICK_MAX);
++    }
++
++    // Last-write-wins for motion
++    if (has_left_motion) {
++        controller.motion_state[0].gyro.x = lgx;
++        controller.motion_state[0].gyro.y = lgy;
++        controller.motion_state[0].gyro.z = lgz;
++        controller.motion_state[0].accel.x = lax;
++        controller.motion_state[0].accel.y = lay;
++        controller.motion_state[0].accel.z = laz;
++    }
++    if (has_right_motion) {
++        controller.motion_state[1].gyro.x = rgx;
++        controller.motion_state[1].gyro.y = rgy;
++        controller.motion_state[1].gyro.z = rgz;
++        controller.motion_state[1].accel.x = rax;
++        controller.motion_state[1].accel.y = ray;
++        controller.motion_state[1].accel.z = raz;
 +    }
  }
 

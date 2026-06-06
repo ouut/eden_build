@@ -19,7 +19,7 @@ Lua side:
     p = player.new(2)        → routes to engine1, writes to controller[1] slot
 ```
 
-## Lua API (target design, not yet implemented)
+## Lua API
 
 ### Create input source
 ```lua
@@ -39,6 +39,7 @@ p:move("left", x, y)                                -- stick, x,y in [-1,1]
 p:motion("left", gx, gy, gz, ax, ay, az)            -- gyro + accel, left joycon
 p:motion("right", gx, gy, gz, ax, ay, az)           -- gyro + accel, right joycon
 p:wait(ms)                                          -- pause this coroutine
+u:recv()          → string or nil                    -- poll latest UDP packet (new_udp only)
 p:kill()                                            -- release slot, stop source
 ```
 
@@ -72,7 +73,8 @@ SLLeft, SLRight, SRLeft, SRRight
 - `wait` = global, coroutine sleep.
 - player_id always explicit. No implicit "current player".
 
-## Current state (already committed)
-Old API still in code: press, release, get_button, set_stick, sleep, get_stick,
-udp_bind, udp_poll, get_title_id, get_game_name, spawn, ScanAndLoad.
-Needs migration to new API above.
+## Script coroutine environment
+Scripts spawned by `player.new_script` get these globals pre-bound to their slot:
+- `press(btn)`, `release(btn)`, `move(which, x, y)`
+- `motion(which, gx, gy, gz, ax, ay, az)`, `wait(ms)`
+No handle needed — these write directly to the coroutine's assigned slot.

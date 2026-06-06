@@ -1,5 +1,6 @@
 -- udp_remote.lua - Eden Overlay example
--- Receives UDP input packets via built-in udp_bind/udp_poll (no external deps).
+-- Receives UDP input via player.new_udp handle, parses packets, writes input.
+--
 -- Packet format (24 bytes, little-endian):
 --   [0]     magic  "OVER" (4 bytes)
 --   [4]     button_mask  u32 (NpadButton bits)
@@ -14,6 +15,7 @@
 --   s.sendto(struct.pack('<4sIffff', b'OVER', 0x0001, -1.0, 0.0, 0.0, 0.0),
 --            ('127.0.0.1', 26760))
 
+local PID = 1
 local PORT = 26760
 
 -- Bitwise helper: Lua 5.3+ has &, LuaJIT needs bit library
@@ -33,7 +35,7 @@ local function le_f32(s, i)
     if b == 0 then return 0.0 end
     local sign = (b >> 31) & 1
     local exp  = (b >> 23) & 0xFF
-    if exp == 0xFF then return 0.0 end   -- inf/nan → 0
+    if exp == 0xFF then return 0.0 end
     local mant = b & 0x7FFFFF
     return (1 - 2*sign) * (1.0 + mant / 0x800000) * 2.0^(exp - 127)
 end
@@ -48,13 +50,13 @@ local BTNS = {
     {0x8000, "DDown"},
 }
 
-assert(udp_bind(PORT), "udp_bind failed")
+local udp = player.new_udp(PID, PORT)
 
 while true do
     -- Drain queue, keep newest
     local last
     while true do
-        local d = udp_poll()
+        local d = udp:recv()
         if not d then break end
         last = d
     end
@@ -75,10 +77,10 @@ while true do
                     release(tb[2])
                 end
             end
-            set_stick("left",  lx, ly)
-            set_stick("right", rx, ry)
+            move("left",  lx, ly)
+            move("right", rx, ry)
         end
     end
 
-    sleep(16)
+    wait(16)
 end
