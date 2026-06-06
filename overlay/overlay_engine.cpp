@@ -213,6 +213,13 @@ int l_udp_poll(lua_State* L) {
     return 1;
 }
 
+int l_spawn(lua_State* L) {
+    if (!g_engine) { lua_pushboolean(L, 0); return 1; }
+    auto path = luaL_checkstring(L, 1);
+    lua_pushboolean(L, g_engine->LoadScript(path));
+    return 1;
+}
+
 int l_get_title_id(lua_State* L) {
     if (!g_engine) { lua_pushinteger(L, 0); return 1; }
     lua_pushinteger(L, static_cast<lua_Integer>(g_engine->GetProgramId()));
@@ -239,6 +246,7 @@ void register_bindings(lua_State* T, SlotArray* slots, int slot) {
     lua_pushcfunction(T, l_get_stick);   lua_setglobal(T, "get_stick");
     lua_pushcfunction(T, l_udp_bind);      lua_setglobal(T, "udp_bind");
     lua_pushcfunction(T, l_udp_poll);      lua_setglobal(T, "udp_poll");
+    lua_pushcfunction(T, l_spawn);         lua_setglobal(T, "spawn");
     lua_pushcfunction(T, l_get_title_id);  lua_setglobal(T, "get_title_id");
     lua_pushcfunction(T, l_get_game_name); lua_setglobal(T, "get_game_name");
 }
