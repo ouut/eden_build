@@ -1,0 +1,25 @@
+--- externals/CMakeLists.txt	2026-06-06 00:32:58
++++ externals/CMakeLists.txt	2026-06-06 00:32:58
+@@ -389,6 +389,22 @@
+             ${breakpad_SOURCE_DIR}/src/common/linux/safe_readlink.cc
+             ${breakpad_SOURCE_DIR}/src/tools/linux/dump_syms/dump_syms.cc)
+         target_link_libraries(dump_syms PRIVATE libbreakpad_client)
++    endif()
++endif()
++
++
++# Lua (overlay dependency)
++AddJsonPackage(lua)
++if (lua_ADDED)
++    file(GLOB LUA_SOURCES ${lua_SOURCE_DIR}/*.c)
++    list(FILTER LUA_SOURCES EXCLUDE REGEX "lua\.c|luac\.c")
++    add_library(lua STATIC ${LUA_SOURCES})
++    target_include_directories(lua PUBLIC ${lua_SOURCE_DIR})
++    if(NOT MSVC)
++        target_compile_options(lua PRIVATE
++            $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-int-conversion>
++            $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-int-float-conversion>
++        )
+     endif()
+ endif()
+ 

@@ -1,14 +1,12 @@
---- src/hid_core/frontend/emulated_controller.cpp
-+++ src/hid_core/frontend/emulated_controller.cpp
-@@ -1917,7 +1917,84 @@
-             continue;
+--- /Users/cc/projects/switch/eden_build/overlay/originals/emulated_controller.cpp	2026-06-05 15:49:48
++++ /tmp/mod.cpp	2026-06-06 00:19:44
+@@ -1918,8 +1918,101 @@
          }
          device->ForceUpdate();
-+    }
+     }
 +
 +    ApplyOverlay();
-+}
-+
+ }
 +void EmulatedController::ApplyOverlay() {
 +    using namespace std::chrono;
 +    const u64 now = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
@@ -32,7 +30,7 @@
 +        }
 +
 +        merged_buttons |= slot.button_mask;
-+
+ 
 +        if (slot.last_update > latest_left &&
 +            (slot.left_x != 0.0f || slot.left_y != 0.0f)) {
 +            lx = slot.left_x; ly = slot.left_y;
@@ -63,7 +61,7 @@
 +            latest_right_motion = slot.last_update;
 +            has_right_motion = true;
 +        }
-     }
++    }
 +
 +    // OR-merge buttons into final state
 +    controller.npad_button_state.raw |= merged_buttons;
@@ -95,6 +93,12 @@
 +        controller.motion_state[1].accel.y = ray;
 +        controller.motion_state[1].accel.z = raz;
 +    }
- }
-
++}
++
++
++    }
++}
++
  NpadButton EmulatedController::GetTurboButtonMask() const {
+     // Apply no mask when disabled
+     if (turbo_button_state < TURBO_BUTTON_DELAY) {

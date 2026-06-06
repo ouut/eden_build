@@ -1,22 +1,22 @@
---- src/hid_core/frontend/emulated_controller.h
-+++ src/hid_core/frontend/emulated_controller.h
+--- /Users/cc/projects/switch/eden_build/overlay/originals/emulated_controller.h	2026-06-05 15:49:48
++++ /tmp/mod.h	2026-06-06 00:19:44
 @@ -25,6 +25,7 @@
  #include "hid_core/hid_core.h"
  #include "hid_core/hid_types.h"
  #include "hid_core/irsensor/irs_types.h"
 +#include "hid_core/frontend/overlay_types.h"
-
+ 
  namespace Core::HID {
  const std::size_t max_emulated_controllers = 2;
 @@ -474,7 +475,14 @@
-
+ 
      /// Swaps the state of the turbo buttons and updates motion input
      void StatusUpdate();
 +
 +    /// Apply overlay input sources to the final controller state (OR-merge buttons,
 +    /// last-write-wins sticks and motion)
 +    void ApplyOverlay();
-+
+ 
 +    // Overlay source slots — written by OverlayEngine, read by ApplyOverlay
 +    std::array<OverlaySlotState, MAX_OVERLAY_SOURCES> overlay_slots{};
 +

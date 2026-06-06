@@ -1,0 +1,14 @@
+--- externals/cpmfile.json	2026-06-06 00:32:58
++++ externals/cpmfile.json	2026-06-06 00:32:58
+@@ -246,5 +246,11 @@
+         "repo": "serge-sans-paille/frozen",
+         "sha": "61dce5ae18",
+         "hash": "b8dfe741c82bc178dfc9749d4ab5a130cee718d9ee7b71d9b547cf5f7f23027ed0152ad250012a8546399fcc1e12187efc68d89d6731256c4d2df7d04eef8d5c"
++    },
++    "lua": {
++        "repo": "lua/lua",
++        "tag": "v5.4.7",
++        "hash": "1e02cb1bf541037f11e44a828266506538b845a8d7d1db12a4bccf3e8533f7766435ddc9a779fcdd62ed2f260b87b652a58a7a261ad01fa30835883d923e8cb4",
++        "bundled": true
+     }
+ }

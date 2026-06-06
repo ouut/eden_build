@@ -34,6 +34,9 @@ extern "C" {
 namespace Core::HID {
 
 namespace {
+
+constexpr s32 HID_JOYSTICK_MAX = 0x7fff;
+
 using steady_clock = std::chrono::steady_clock;
 
 u64 NowUs() {

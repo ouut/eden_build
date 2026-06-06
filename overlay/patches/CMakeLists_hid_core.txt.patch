@@ -1,0 +1,18 @@
+--- src/hid_core/CMakeLists.txt	2026-06-06 00:32:58
++++ src/hid_core/CMakeLists.txt	2026-06-06 00:32:58
+@@ -9,6 +9,9 @@
+     frontend/emulated_console.h
+     frontend/emulated_controller.cpp
+     frontend/emulated_controller.h
++    frontend/overlay_engine.cpp
++    frontend/overlay_engine.h
++    frontend/overlay_types.h
+     frontend/emulated_devices.cpp
+     frontend/emulated_devices.h
+     frontend/input_converter.cpp
+@@ -158,4 +161,4 @@
+ endif()
+ 
+ create_target_directory_groups(hid_core)
+-target_link_libraries(hid_core PUBLIC core)
++target_link_libraries(hid_core PUBLIC core lua)
