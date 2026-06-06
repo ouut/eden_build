@@ -33,18 +33,23 @@ s = player.new_script(player_id, "x.lua", slot) -- file, fixed slot
 
 ### Write (handle methods, own slot only)
 ```lua
-p:press("A")                        -- hold button
-p:release("A")                      -- release button
-p:move("left", x, y)                -- stick, x,y in [-1,1]
-p:wait(ms)                          -- pause this coroutine
-p:kill()                            -- release slot, stop source
--- p:motion(gx, gy, gz, ax, ay, az) -- TBD: need C++ side motion write support
+p:press("A")                                        -- hold button
+p:release("A")                                      -- release button
+p:move("left", x, y)                                -- stick, x,y in [-1,1]
+p:motion("left", gx, gy, gz, ax, ay, az)            -- gyro + accel, left joycon
+p:motion("right", gx, gy, gz, ax, ay, az)           -- gyro + accel, right joycon
+p:wait(ms)                                          -- pause this coroutine
+p:kill()                                            -- release slot, stop source
 ```
+
+All writes are last-write-wins by timestamp when multiple slots write the same field.
 
 ### Read (final merged controller state)
 ```lua
-player:held(player_id, "A")   → bool            -- button pressed?
-player:axis(player_id, "left") → x, y           -- stick position [-1,1]
+player:held(player_id, "A")   → bool                -- button pressed?
+player:axis(player_id, "left") → x, y               -- stick position [-1,1]
+player:motion(player_id, "left")  → gx,gy,gz,ax,ay,az
+player:motion(player_id, "right") → gx,gy,gz,ax,ay,az
 ```
 
 ### Context
