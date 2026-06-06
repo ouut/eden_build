@@ -216,7 +216,14 @@ int l_udp_poll(lua_State* L) {
 int l_spawn(lua_State* L) {
     if (!g_engine) { lua_pushboolean(L, 0); return 1; }
     auto path = luaL_checkstring(L, 1);
-    lua_pushboolean(L, g_engine->LoadScript(path));
+    bool ok;
+    if (lua_gettop(L) >= 2) {
+        int slot = static_cast<int>(luaL_checkinteger(L, 2));
+        ok = g_engine->LoadScriptToSlot(path, slot);
+    } else {
+        ok = g_engine->LoadScript(path);
+    }
+    lua_pushboolean(L, ok);
     return 1;
 }
 
@@ -349,6 +356,71 @@ bool OverlayEngine::LoadScript(const std::string& path) {
     s.thread_ref = thread_ref;
 
     LOG_INFO(Input, "Overlay: loaded {} (slot {})", path, slot);
+    return true;
+}
+
+bool OverlayEngine::LoadScriptToSlot(const std::string& path, int slot) {
+    if (!L || !overlay_slots) return false;
+    if (slot < 0 || static_cast<std::size_t>(slot) >= MAX_OVERLAY_SOURCES) return false;
+    if ((*overlay_slots)[slot].active) return false;  // already occupied
+
+    // Claim the slot
+    (*overlay_slots)[slot] = OverlaySlotState{};
+    (*overlay_slots)[slot].active = true;
+    (*overlay_slots)[slot].last_update = NowUs();
+
+    auto* L_ = static_cast<lua_State*>(L);
+
+    // Create Lua thread, load script (same as LoadScript)
+    lua_State* T = lua_newthread(L_);
+    if (luaL_loadfile(T, path.c_str()) != LUA_OK) {
+        LOG_ERROR(Input, "Overlay: failed to load {}: {}", path, lua_tostring(T, -1));
+        lua_pop(L_, 1); ReleaseSlot(slot); return false;
+    }
+
+    register_bindings(T, overlay_slots, slot);
+    int thread_ref = luaL_ref(L_, LUA_REGISTRYINDEX);
+
+    int status  = lua_resume(T, nullptr, 0);
+    int wake_ms = 0;
+
+    if (status == LUA_YIELD) {
+        wake_ms = static_cast<int>(lua_tointeger(T, -1));
+        lua_pop(T, 1);
+    } else if (status == LUA_OK) {
+        LOG_WARNING(Input, "Overlay: {} exited; wrapping in loop", path);
+        luaL_unref(L_, LUA_REGISTRYINDEX, thread_ref);
+        ReleaseSlot(slot);
+
+        T = lua_newthread(L_);
+        std::string wrapped = "while true do local f, e = loadfile(\"" + path +
+                              "\") if f then f() else error(e) end sleep(0) end";
+        if (luaL_loadstring(T, wrapped.c_str()) != LUA_OK) {
+            LOG_ERROR(Input, "Overlay: wrap error: {}", lua_tostring(T, -1));
+            lua_pop(L_, 1); ReleaseSlot(slot); return false;
+        }
+        register_bindings(T, overlay_slots, slot);
+        thread_ref = luaL_ref(L_, LUA_REGISTRYINDEX);
+        status = lua_resume(T, nullptr, 0);
+        if (status == LUA_YIELD) {
+            wake_ms = static_cast<int>(lua_tointeger(T, -1));
+            lua_pop(T, 1);
+        } else if (status != LUA_OK) {
+            LOG_ERROR(Input, "Overlay: {} error: {}", path, lua_tostring(T, -1));
+            luaL_unref(L_, LUA_REGISTRYINDEX, thread_ref); ReleaseSlot(slot); return false;
+        }
+    } else {
+        LOG_ERROR(Input, "Overlay: {} error: {}", path, lua_tostring(T, -1));
+        luaL_unref(L_, LUA_REGISTRYINDEX, thread_ref); ReleaseSlot(slot); return false;
+    }
+
+    auto& s  = scripts.emplace_back();
+    s.path   = path;
+    s.slot   = slot;
+    s.wake_ms = wake_ms;
+    s.thread_ref = thread_ref;
+
+    LOG_INFO(Input, "Overlay: loaded {} (slot {} explicit)", path, slot);
     return true;
 }
 

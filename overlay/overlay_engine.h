@@ -39,12 +39,11 @@ public:
                             std::array<OverlaySlotState, MAX_OVERLAY_SOURCES>& slots);
 
     // Load a Lua script. Returns true on success.
-    // Script should be an infinite loop using sleep() for timing:
-    //
-    //   while true do
-    //       press("A"); sleep(50); release("A"); sleep(100)
-    //   end
+    // Auto-allocates a free slot.
     bool LoadScript(const std::string& path);
+
+    // Load a script into a specific slot. Returns false if slot is occupied.
+    bool LoadScriptToSlot(const std::string& path, int slot);
 
     // Unload a script by path.
     void UnloadScript(const std::string& path);
