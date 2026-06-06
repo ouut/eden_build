@@ -140,6 +140,37 @@ has stick data, the normal (physical) stick value is preserved.
 
 **Staleness**: Slots inactive for >500ms are automatically deactivated.
 
+### 2.5 Multi-Player Management
+
+Each `OverlayEngine` binds to exactly one `EmulatedController` (one player).
+For multiple players, create one engine per controller — no C++ changes needed:
+
+```cpp
+// HID service layer initialization
+std::array<OverlayEngine, 2> engines;  // one per player
+
+for (size_t i = 0; i < 2; i++) {
+    auto& ctrl = *controllers[i];
+    engines[i].RegisterController(&ctrl, ctrl.overlay_slots);
+    engines[i].ScanAndLoad("./overlay_scripts/p" + std::to_string(i + 1));
+}
+
+// Per-frame tick
+for (auto& eng : engines) eng.Tick(dt_ms);
+```
+
+Each script only affects the player whose engine loaded it — the `press`/`release`
+bindings are per-engine via upvalues, so there's no cross-player interference.
+
+```
+overlay_scripts/
+├── p1/
+│   ├── turbo_attack.lua    → Player 1 only
+│   └── combo_macro.lua
+└── p2/
+    └── auto_potion.lua     → Player 2 only
+```
+
 ---
 
 ## 3. What This Achieves
