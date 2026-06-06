@@ -31,6 +31,7 @@ env:
 
 jobs:
   clone:
+    if: false  # disabled
     outputs:
       cachever: ${{ steps.out.outputs.cachever }}
       pgo: ${{ steps.out.outputs.pgo }}
@@ -85,17 +86,13 @@ jobs:
           cp overlay/overlay_types.h  "$FRONTEND/"
           cp overlay/overlay_engine.h "$FRONTEND/"
           cp overlay/overlay_engine.cpp "$FRONTEND/"
-          # Apply patches
+          # Apply controller patches
           patch -d eden -p0 < overlay/patches/emulated_controller.h.patch
           patch -d eden -p0 < overlay/patches/emulated_controller.cpp.patch
-          # Update CMakeLists.txt
-          CMAKE="eden/src/hid_core/CMakeLists.txt"
-          if ! grep -q "overlay_engine.cpp" "$CMAKE"; then
-            sed -i '/frontend\/emulated_controller\.cpp/a\
-    frontend/overlay_engine.cpp\
-    frontend/overlay_engine.h\
-    frontend/overlay_types.h' "$CMAKE"
-          fi
+          # Apply Lua + CMake patches
+          patch -d eden -p0 < overlay/patches/cpmfile.json.patch
+          patch -d eden -p0 < overlay/patches/CMakeLists.txt.patch
+          patch -d eden -p0 < overlay/patches/CMakeLists_hid_core.txt.patch
           # Verify overlay integration
           grep -q 'overlay_slots' eden/src/hid_core/frontend/emulated_controller.h && \
             echo "Overlay patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }

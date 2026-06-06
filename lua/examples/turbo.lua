@@ -1,6 +1,6 @@
--- turbo_attack.lua - Eden Overlay example
+-- turbo.lua - Eden Overlay example
 -- Rapidly presses A while the user holds L (turbo fire).
--- Uses global press/release/wait bound to this coroutine's slot.
+-- API: player:held, press, release, wait
 
 local PID = 1
 local ACTIVE   = 50  -- ms A is pressed
@@ -13,6 +13,6 @@ while true do
         release("A")
         wait(INACTIVE)
     else
-        wait(16)  -- ~60fps poll
+        wait(16)
     end
 end
