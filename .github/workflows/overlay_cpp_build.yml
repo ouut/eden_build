@@ -1,4 +1,4 @@
-name: "DSU Build"
+name: "Overlay C++ Build"
 
 on:
   workflow_dispatch:
@@ -19,5 +19,5 @@ jobs:
       devel: "true"
       build-id: 'test'
       ref: ${{ inputs.ref }}
-      patch-type: 'dsu'
+      patch-type: 'overlay-cpp'
     secrets: inherit

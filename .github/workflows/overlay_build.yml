@@ -17,6 +17,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       devel: "true"
-      build-id: 'nightly'
+      build-id: 'test'
       ref: ${{ inputs.ref }}
+      patch-type: 'overlay-lua'
     secrets: inherit
