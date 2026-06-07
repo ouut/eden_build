@@ -390,3 +390,4 @@ Settings::values.overlay_port = port;
 | `scripts/apply_overlay.sh` | 复制 + 打 patch 的一键脚本 |
 | `scripts/over_sender.py` | ✅ 已存在，需更新到 84-byte 格式 |
 | `docs/ARCHITECTURE.md` | 架构文档（可选） |
+,   

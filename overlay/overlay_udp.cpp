@@ -3,6 +3,7 @@
 
 #include "hid_core/frontend/overlay_udp.h"
 
+#include <array>
 #include <chrono>
 #include <cstring>
 
@@ -47,9 +48,24 @@ bool ParsePacket(const u8* data, std::size_t len, OverlayState& out) {
         return false;
     }
 
+    auto read_u32 = [&](std::size_t offset) -> u32 {
+        u32 val;
+        std::memcpy(&val, data + offset, sizeof(u32));
+        return val;
+    };
+    auto read_u64 = [&](std::size_t offset) -> u64 {
+        u64 val;
+        std::memcpy(&val, data + offset, sizeof(u64));
+        return val;
+    };
+    auto read_f32 = [&](std::size_t offset) -> f32 {
+        f32 val;
+        std::memcpy(&val, data + offset, sizeof(f32));
+        return val;
+    };
+
     // magic "OVER" at offset 0
-    const u32 magic = *reinterpret_cast<const u32*>(data);
-    if (magic != OverlayProtocol::MAGIC) {
+    if (read_u32(0) != OverlayProtocol::MAGIC) {
         return false;
     }
 
@@ -59,14 +75,8 @@ bool ParsePacket(const u8* data, std::size_t len, OverlayState& out) {
         return false; // Other, Handheld, or invalid
     }
 
-    out.control_mask = *reinterpret_cast<const u32*>(data + 8);
-    out.button_mask  = *reinterpret_cast<const u64*>(data + 12);
-
-    auto read_f32 = [&](std::size_t offset) -> f32 {
-        f32 val;
-        std::memcpy(&val, data + offset, sizeof(f32));
-        return val;
-    };
+    out.control_mask = read_u32(8);
+    out.button_mask  = read_u64(12);
 
     out.left_x  = read_f32(20);
     out.left_y  = read_f32(24);
@@ -230,8 +240,9 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
 
     // ── Buttons: OR merge (bit 0) ───────────────────────────────────────
     if (ctrl & OverlayControl::BUTTON) {
-        controller.npad_button_state.raw =
-            static_cast<NpadButton>(controller.npad_button_state.raw | state.button_mask);
+        const u64 raw_val =
+            static_cast<u64>(controller.npad_button_state.raw) | state.button_mask;
+        controller.npad_button_state.raw = static_cast<NpadButton>(raw_val);
     }
 
     // ── Left stick ──────────────────────────────────────────────────────

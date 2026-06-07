@@ -45,6 +45,11 @@ patch --forward -p1 -d "$EDEN_DIR" < "$PATCH_DIR/emulated_controller.cpp.patch" 
     && echo "  .cpp patch applied" || echo "  .cpp patch already applied (skipped)"
 
 echo ""
+echo "=== Patching CMakeLists.txt (add overlay to build) ==="
+patch --forward -p1 -d "$EDEN_DIR" < "$PATCH_DIR/CMakeLists_hid_core.txt.patch" \
+    && echo "  CMakeLists patch applied" || echo "  CMakeLists patch already applied (skipped)"
+
+echo ""
 echo "=== Done ==="
 echo "Overlay source files integrated into $EDEN_SRC"
-echo "Next: rebuild Eden with overlay support enabled in CMakeLists.txt"
+echo "Next: rebuild Eden"
