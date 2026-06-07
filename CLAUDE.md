@@ -2,7 +2,7 @@
 
 ## 设计原则
 - 不引入 Lua。逻辑全在 C++。
-- 多 pad 支持（最多 4 玩家），UDP 包内 `pad_id` 区分目标 pad。
+- 多 pad 支持（最多 8 玩家，匹配 Switch 硬件上限），UDP 包内 `pad_id` 区分目标 pad。
 - UDP 接收输入，C++ 解析协议并写入 overlay 状态。
 - 和物理输入的冲突处理：
   - 按键：OR 合并（任一方按下即生效）
@@ -28,7 +28,7 @@ docs/
 └── ARCHITECTURE.md
 ```
 
-## OverlayState（数组，每 pad 一份，最多 4）
+## OverlayState（数组，每 pad 一份，最多 8）
 ```cpp
 struct OverlayState {
     // Buttons
@@ -52,7 +52,7 @@ struct OverlayState {
 };
 
 // 每个 EmulatedController 持有一份
-std::array<OverlayState, 4> overlay_states;
+std::array<OverlayState, 8> overlay_states;
 ```
 
 ## UDP 协议（76-byte，little-endian）
@@ -63,7 +63,7 @@ std::array<OverlayState, 4> overlay_states;
 Offset  Type    Field
 ────────────────────────────────────────────────
 [0]     char[4] magic "OVER"
-[4]     u8      pad_id             目标 pad 编号，0-3
+[4]     u8      pad_id             目标 pad 编号，0-7
 [5]     u8[3]   _reserved          padding，保证对齐
 [8]     u32     button_mask        按键位图
 [12]    f32     left_x             左摇杆 X，-1.0 ~ 1.0
@@ -109,6 +109,72 @@ Eden 内部：
 - `AnalogStickState` — `{s32 x, s32 y}`，写入时做：`s32(value * 32767)`（`HID_JOYSTICK_MAX = 0x7FFF`）
 
 Overlay 协议直接使用 f32（-1.0 ~ 1.0），ApplyOverlay() 里乘以 32767 写到 `analog_stick_state`。
+
+## 部分覆盖问题（Open Issue）
+
+### 场景：同一 pad，物理和 overlay 同时操作不同轴
+
+用户用 pad 0 玩塞尔达：
+
+- **左手**：持物理 Joy-Con，推左摇杆往前走 → `left_y = 0.8`
+- **右手**：持手机，滑动右摇杆转视角 → 手机 app 发 UDP 到 pad 0
+
+手机 app 构造的 UDP 包必须填充全部字段。它不关心左摇杆，所以填 0：
+
+```
+pad_id=0, left=(0,0), right=(0.5,0), buttons=0, motion...=0
+```
+
+帧序列：
+
+```
+帧1  StatusUpdate:
+      物理输入: left=(0, 0.8), right=(0, 0)
+      无 UDP 包，overlay active=false → 跳过
+      → 角色往前走 ✅
+
+帧2  收到 UDP 包:
+      overlay_states[0]: left=(0, 0), right=(0.5, 0), last_update=t2
+      
+帧3  StatusUpdate:
+      物理输入: left=(0, 0.8), right=(0, 0), last_write=t1
+      overlay:  left=(0, 0), right=(0.5, 0), last_update=t2
+      t2 > t1 → overlay 覆盖
+      → 左摇杆归零，角色停下 ❌
+      → 右摇杆向右，视角转动 ✅
+```
+
+**结果：角色本来在往前走，手机每发一帧 UDP，角色就被钉在原地。** 用户左手一直推摇杆，但 overlay 把左摇杆清零了。
+
+### 为什么按键不会这样
+
+按键 OR 合并：`button_mask | 0 = button_mask`。overlay 填 0 不会破坏物理按键。
+
+摇杆 last-write-wins：`0` 就是归中，是一等公民的值。overlay 填 0 和「明确要求归中」无法区分。
+
+### 根本矛盾
+
+固定格式的全量包要求 sender 对每个字段表态。但 sender 只想控制其中一部分，没想控制的字段被迫填 0，而这个 0 会破坏物理输入。
+
+### 方案 B：control_mask
+
+包体增加 4 字节 control_mask，每个 bit 对应一个可控单元：
+
+```
+bit 0:  left_x       bit 1:  left_y
+bit 2:  right_x      bit 3:  right_y
+bit 4:  left_gyro    bit 5:  left_accel
+bit 6:  right_gyro   bit 7:  right_accel
+bit 8:  button_mask
+```
+
+merge 时，control_mask 中为 1 的字段走 last-write-wins；为 0 的字段不覆盖，保留物理值。
+
+包体变为 80 字节（76 + 4）。**代价**：协议复杂度上升，sender 必须能计算 control_mask。
+
+### 当前态度
+
+先不做。可能的使用模式不是「同一 pad 物理和 overlay 混用」，而是「pad 0 全物理，pad 1-7 纯 overlay」。暂不接受这部分复杂度。
 
 ## Merge 规则（最终版）
 
@@ -163,7 +229,7 @@ Overlay 发送端通过 UDP 发包。UDP 无连接、无心跳、无对端存活
 
 ```
 每帧 ApplyOverlay():
-    for pad_id in 0..3:
+    for pad_id in 0..7:
         now = steady_clock::now()
         if (now - overlay_states[pad_id].last_update > 100ms) {
             overlay_states[pad_id].active = false;
@@ -190,7 +256,7 @@ Overlay 发送端通过 UDP 发包。UDP 无连接、无心跳、无对端存活
 原因：用一个过时包更新状态后立刻被下一个包覆盖，徒增 CPU 开销。
 
 ## EmulatedController patch（最小改动）
-- `.h`: 加 `#include`、`std::array<OverlayState, 4> overlay_states` 成员、`ApplyOverlay()` 声明、`StartOverlayUdp()` 声明
+- `.h`: 加 `#include`、`std::array<OverlayState, 8> overlay_states` 成员、`ApplyOverlay()` 声明、`StartOverlayUdp()` 声明
 - `.cpp`: `StatusUpdate()` 末尾加 `ApplyOverlay()` 调用、`ApplyOverlay()` 实现、`StartOverlayUdp()` 实现
 
 ## apply_overlay.sh
