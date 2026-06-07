@@ -88,7 +88,7 @@ Offset  Type    Field
 
 Python 发送示例：
 ```python
-struct.pack('<4sB3xI20f', b'OVER', pad_id, buttons,
+struct.pack('<4sB3xI16f', b'OVER', pad_id, buttons,
     lx, ly, rx, ry,
     lgx, lgy, lgz, lax, lay, laz,
     rgx, rgy, rgz, rax, ray, raz)
