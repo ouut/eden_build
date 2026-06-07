@@ -16,6 +16,11 @@ on:
         type: string
         required: false
         default: ''
+      patch-type:
+        description: 'Which patch to apply: dsu, overlay-cpp, overlay-lua, or none'
+        type: string
+        required: false
+        default: 'none'
 
 env:
   BUILD_REF: ${{ inputs.ref }}
@@ -70,6 +75,7 @@ jobs:
           git -C eden checkout "${{ inputs.ref }}"
 
       - name: Patch DSU
+        if: ${{ inputs.patch-type == 'dsu' }}
         run: |
           echo "Applying DSU full controller patch..."
           sed -i 's/enable_udp_controller{linkage, false/enable_udp_controller{linkage, true/' \
@@ -77,22 +83,35 @@ jobs:
           grep -q 'enable_udp_controller{linkage, true' eden/src/common/settings.h && \
             echo "DSU patch applied successfully" || { echo "DSU patch FAILED"; exit 1; }
 
-      - name: Apply Overlay
+      - name: Apply Overlay (C++)
+        if: ${{ inputs.patch-type == 'overlay-cpp' }}
         run: |
           echo "Applying Eden Overlay C++ patch..."
           FRONTEND="eden/src/hid_core/frontend"
-          # Copy overlay C++ sources
           cp overlay/overlay_state.h "$FRONTEND/"
           cp overlay/overlay_udp.h   "$FRONTEND/"
           cp overlay/overlay_udp.cpp "$FRONTEND/"
-          # Apply controller patches
           patch -p1 -d eden < overlay/patches/emulated_controller.h.patch
           patch -p1 -d eden < overlay/patches/emulated_controller.cpp.patch
-          # Add overlay files to CMake build (no Lua dependency)
           patch -p1 -d eden < overlay/patches/CMakeLists_hid_core.txt.patch
-          # Verify overlay integration
           grep -q 'ApplyOverlay' eden/src/hid_core/frontend/emulated_controller.cpp && \
             echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
+
+      - name: Apply Overlay (Lua)
+        if: ${{ inputs.patch-type == 'overlay-lua' }}
+        run: |
+          echo "Applying Eden Overlay Lua patch..."
+          FRONTEND="eden/src/hid_core/frontend"
+          cp overlay/overlay_types.h  "$FRONTEND/"
+          cp overlay/overlay_engine.h "$FRONTEND/"
+          cp overlay/overlay_engine.cpp "$FRONTEND/"
+          patch -p0 -d eden < overlay/patches/emulated_controller.h.patch
+          patch -p0 -d eden < overlay/patches/emulated_controller.cpp.patch
+          patch -p0 -d eden < overlay/patches/cpmfile.json.patch
+          patch -p0 -d eden < overlay/patches/CMakeLists.txt.patch
+          patch -p0 -d eden < overlay/patches/CMakeLists_hid_core.txt.patch
+          grep -q 'overlay_slots' eden/src/hid_core/frontend/emulated_controller.h && \
+            echo "Overlay Lua patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
 
       # Clone step is still changing forgejo.env, due to a bug on Forgejo, send after it
       # <https://codeberg.org/forgejo/forgejo/issues/9601>
