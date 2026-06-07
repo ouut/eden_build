@@ -1,0 +1,10 @@
+--- a/eden/src/hid_core/frontend/emulated_controller.h
++++ b/eden/src/hid_core/frontend/emulated_controller.h
+@@ -25,6 +25,7 @@
+ #include "hid_core/hid_core.h"
+ #include "hid_core/hid_types.h"
+ #include "hid_core/irsensor/irs_types.h"
++#include "hid_core/frontend/overlay_udp.h"
+
+ namespace Core::HID {
+ const std::size_t max_emulated_controllers = 2;
