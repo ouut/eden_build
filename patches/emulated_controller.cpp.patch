@@ -1,9 +1,9 @@
---- a/eden/src/hid_core/frontend/emulated_controller.cpp
-+++ b/eden/src/hid_core/frontend/emulated_controller.cpp
-@@ -1918,6 +1918,8 @@
+--- a/src/hid_core/frontend/emulated_controller.cpp
++++ b/src/hid_core/frontend/emulated_controller.cpp
+@@ -1919,6 +1919,8 @@
          device->ForceUpdate();
      }
-+
+
 +    ApplyOverlay(npad_id_type, controller);
  }
 

@@ -1,5 +1,5 @@
---- a/eden/src/hid_core/frontend/emulated_controller.h
-+++ b/eden/src/hid_core/frontend/emulated_controller.h
+--- a/src/hid_core/frontend/emulated_controller.h
++++ b/src/hid_core/frontend/emulated_controller.h
 @@ -25,6 +25,7 @@
  #include "hid_core/hid_core.h"
  #include "hid_core/hid_types.h"

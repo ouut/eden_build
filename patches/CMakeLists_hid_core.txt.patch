@@ -1,5 +1,5 @@
---- a/eden/src/hid_core/CMakeLists.txt
-+++ b/eden/src/hid_core/CMakeLists.txt
+--- a/src/hid_core/CMakeLists.txt
++++ b/src/hid_core/CMakeLists.txt
 @@ -9,6 +9,9 @@
      frontend/emulated_console.h
      frontend/emulated_controller.cpp

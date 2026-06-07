@@ -36,17 +36,17 @@ cp -v "$ROOT_DIR/overlay/overlay_udp.cpp"  "$EDEN_SRC/"
 
 echo ""
 echo "=== Patching emulated_controller.h ==="
-patch --forward -p1 -d "$EDEN_DIR" < "$PATCH_DIR/emulated_controller.h.patch" \
+patch --forward -p1 -d "$EDEN_DIR/eden" < "$PATCH_DIR/emulated_controller.h.patch" \
     && echo "  .h patch applied" || echo "  .h patch already applied (skipped)"
 
 echo ""
 echo "=== Patching emulated_controller.cpp ==="
-patch --forward -p1 -d "$EDEN_DIR" < "$PATCH_DIR/emulated_controller.cpp.patch" \
+patch --forward -p1 -d "$EDEN_DIR/eden" < "$PATCH_DIR/emulated_controller.cpp.patch" \
     && echo "  .cpp patch applied" || echo "  .cpp patch already applied (skipped)"
 
 echo ""
 echo "=== Patching CMakeLists.txt (add overlay to build) ==="
-patch --forward -p1 -d "$EDEN_DIR" < "$PATCH_DIR/CMakeLists_hid_core.txt.patch" \
+patch --forward -p1 -d "$EDEN_DIR/eden" < "$PATCH_DIR/CMakeLists_hid_core.txt.patch" \
     && echo "  CMakeLists patch applied" || echo "  CMakeLists patch already applied (skipped)"
 
 echo ""
