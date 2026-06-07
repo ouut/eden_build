@@ -93,11 +93,9 @@ jobs:
           cp overlay/overlay_udp.cpp "$FRONTEND/"
           patch -p1 -d eden < patches/emulated_controller.h.patch
           patch -p1 -d eden < patches/emulated_controller.cpp.patch
-          # Add overlay files to CMake build (after emulated_controller.h)
-          sed -i '/frontend\/emulated_controller.h/a\    frontend/overlay_state.h\n    frontend/overlay_udp.cpp\n    frontend/overlay_udp.h' \
-            eden/src/hid_core/CMakeLists.txt
+          patch -p1 -d eden < patches/CMakeLists_hid_core.txt.patch
           grep -q 'ApplyOverlay' eden/src/hid_core/frontend/emulated_controller.cpp && \
-          grep -q 'overlay_udp' eden/src/hid_core/CMakeLists.txt && \
+            echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
             echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
 
       - name: Apply Overlay (Lua)
