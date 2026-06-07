@@ -252,6 +252,189 @@ Overlay 发送端通过 UDP 发包。UDP 无连接、无心跳、无对端存活
 - `.h`: 加 `#include`、`std::array<OverlayState, 8> overlay_states` 成员、`ApplyOverlay()` 声明、`StartOverlayUdp()` 声明
 - `.cpp`: `StatusUpdate()` 末尾加 `ApplyOverlay()` 调用、`ApplyOverlay()` 实现、`StartOverlayUdp()` 实现
 
+## Eden 集成：UI 设置与 HID Core 对接
+
+### 概述
+
+在 Eden 模拟器的 Qt 设置界面添加两个控件：
+- **开关**：启用/禁用 overlay UDP 监听
+- **端口**：UDP 监听端口（默认 26760）
+
+这两个设置需要贯穿三个层：Settings 定义 → Qt UI → HID Core 消费。
+
+### 新增 Settings（`common/settings.h`）
+
+文件：`eden/src/common/settings.h`，在 `Values` struct 的 Controls 区域（约第 715 行，现有 `enable_udp_controller` 附近）添加：
+
+```cpp
+// Overlay
+Setting<bool> enable_overlay{linkage, false, "enable_overlay", Category::Overlay};
+Setting<u16> overlay_port{linkage, 26760, "overlay_port", Category::Overlay,
+                          Specialization::Default, true, true};
+```
+
+说明：
+- `enable_overlay` — bool，默认 `false`。非 `SwitchableSetting`，因为 overlay 不需要 per-game override
+- `overlay_port` — u16，默认 `26760`。`Specialization::Default` 表示普通数值输入
+- 两者都属于 `Category::Overlay`（枚举已存在但之前未被使用）
+- 不需要 `SwitchableSetting` 因为 overlay 是全局开关，不是 per-game 配置
+
+**注意**：不要和现有的两个设置混淆（它们用于 DSU/Cemuhook 协议，与 OVER overlay 完全无关）：
+```cpp
+// 第 715-718 行 — 这些是 DSU 协议的，不是 overlay
+Setting<std::string> udp_input_servers{...};    // DSU 服务器地址
+Setting<bool> enable_udp_controller{...};       // DSU 控制器开关
+```
+
+### 新增 UI 控件（Qt 配置页）
+
+#### 位置选择
+
+现有 `configure_input_advanced.ui` 中，"Other" QGroupBox 包含多个 checkbox（`emulate_analog_keyboard`、`enable_raw_input`、`enable_udp_controller` 等），以 `QGridLayout` 排列。
+
+**方案**：在 "Other" GroupBox 的 grid 末尾追加新行，放 overlay 开关和端口输入框。
+
+#### .ui 文件改动（`yuzu/configuration/configure_input_advanced.ui`）
+
+文件：`eden/src/yuzu/configuration/configure_input_advanced.ui`
+
+在 `OtherGridLayout` 的最后一个 `<item>` 之后（约第 2770 行附近），`</layout>` 关闭前，追加：
+
+```xml
+<!-- Overlay: enable toggle + port -->
+<item row="9" column="0">
+ <widget class="QCheckBox" name="enable_overlay">
+  <property name="minimumSize">
+   <size>
+    <width>0</width>
+    <height>23</height>
+   </size>
+  </property>
+  <property name="text">
+   <string>Enable overlay input (UDP)</string>
+  </property>
+  <property name="toolTip">
+   <string>Receive external input via UDP OVER protocol on the configured port.
+Buttons are OR-merged, sticks last-write-wins with control_mask.</string>
+  </property>
+ </widget>
+</item>
+<item row="9" column="2">
+ <widget class="QSpinBox" name="overlay_port">
+  <property name="minimum">
+   <number>1024</number>
+  </property>
+  <property name="maximum">
+   <number>65535</number>
+  </property>
+  <property name="value">
+   <number>26760</number>
+  </property>
+  <property name="toolTip">
+   <string>UDP port for overlay input (1024-65535)</string>
+  </property>
+ </widget>
+</item>
+```
+
+说明：
+- `row="9"` — 当前 OtherGridLayout 最大 row 是 8，使用 row 9 避免冲突
+- checkbox 在 column 0，端口 spinbox 在 column 2（column 1 留空，保持间距）
+- `enable_overlay` — QCheckBox，默认未勾选
+- `overlay_port` — QSpinBox，范围 1024-65535，默认 26760
+
+#### .cpp 文件改动（`yuzu/configuration/configure_input_advanced.cpp`）
+
+文件：`eden/src/yuzu/configuration/configure_input_advanced.cpp`
+
+**ApplyConfiguration()** 末尾追加（约第 148 行之后）：
+
+```cpp
+Settings::values.enable_overlay = ui->enable_overlay->isChecked();
+Settings::values.overlay_port = static_cast<u16>(ui->overlay_port->value());
+```
+
+**LoadConfiguration()** 末尾追加（约第 183 行之后）：
+
+```cpp
+ui->enable_overlay->setChecked(Settings::values.enable_overlay.GetValue());
+ui->overlay_port->setValue(Settings::values.overlay_port.GetValue());
+```
+
+### Settings 消费：HID Core 启动/停止 UDP 监听
+
+设置定义好了、UI 也能读写，但还需要在 HID 层实际使用它们。
+
+#### 消费点：`EmulatedController` 或 `HIDCore`
+
+有几种方案：
+
+**方案 A：在 `StartOverlayUdp()` 中读取**（推荐，最简单）
+
+`StartOverlayUdp()` 在 `EmulatedController` 构造函数或初始化时调用，读取 settings 决定行为：
+
+```cpp
+void EmulatedController::StartOverlayUdp() {
+    if (!Settings::values.enable_overlay) {
+        return;  // overlay 关闭，不启动 UDP 监听
+    }
+    u16 port = Settings::values.overlay_port;
+    // bind UDP socket on 0.0.0.0:port
+    // spawn receive thread or register to poll in StatusUpdate()
+}
+```
+
+`StartOverlayUdp()` 调用时机：
+- 模拟器启动时（`EmulatedController` 构造）
+- 用户在 UI 修改设置后点击 Apply → 重启模拟器时生效
+
+**方案 B：热切换（监听 settings 变化，立即启动/停止）**
+
+`ApplyConfiguration()` 保存设置后发信号，HID 层接收信号，动态 bind/unbind UDP socket。更复杂但用户体验更好。
+
+**当前采用方案 A**。overlay 开关变更需要重启模拟器才生效（和大部分 Controls 设置一致）。
+
+#### 设置保存和加载
+
+Eden 的 settings 系统自动处理持久化。`Setting<bool>` 和 `Setting<u16>` 通过 `linkage` 自动读写 `qt-config.ini`：
+
+```ini
+[Controls]
+enable_overlay=true
+overlay_port=26760
+```
+
+不需要额外写序列化代码。
+
+### 完整文件清单
+
+| 文件 | 操作 | 行数（参考） | 说明 |
+|---|---|---|---|
+| `eden/src/common/settings.h` | 插入 2 行 | L715 附近 | 加 `enable_overlay` + `overlay_port` |
+| `eden/src/yuzu/configuration/configure_input_advanced.ui` | 追加 ~30 行 | OtherGridLayout 末尾 | 加 checkbox + spinbox |
+| `eden/src/yuzu/configuration/configure_input_advanced.cpp` | 追加 2+2 行 | ApplyConfiguration / LoadConfiguration 末尾 | 读写 UI 控件到 settings |
+| `eden/src/hid_core/frontend/emulated_controller.cpp` | 追加 ~20 行 | StartOverlayUdp() 实现 | 读取 settings 决定是否监听 |
+
+### 与现有 DSU UDP Controller 的区分
+
+Eden 已有 `enable_udp_controller`（DSU/Cemuhook 协议），配置页上它的 label 是 "Enable UDP controllers (not needed for motion)"。这是**另一个功能**——把外部的真实手柄（通过 DSU 协议）映射到 Eden 的虚拟控制器。
+
+我们的 overlay 是**完全不同的东西**——接收 OVER 协议的 80-byte 数据包，与物理输入混合 merge。两个开关独立工作，端口也独立配置。
+
+DSU 相关设置（**不碰它**）：
+```cpp
+Setting<std::string> udp_input_servers;    // DSU 服务器地址，如 "192.168.1.5:26760"（出站连接）
+Setting<bool> enable_udp_controller;       // 启用 DSU 客户端（连接外部手柄）
+```
+
+Overlay 新增设置：
+```cpp
+Setting<bool> enable_overlay;    // 启用 overlay UDP 监听（入站监听，接收 OVER 协议包）
+Setting<u16> overlay_port;       // 监听端口（默认 26760）
+```
+
+两者不冲突——DSU 是出站客户端（连接外部手柄到 Eden），overlay 是入站服务器（外部 app 发数据给 Eden）。端口可以相同是因为 DSU 客户端用的是远程地址，overlay 监听的是本地端口。
+
 ## apply_overlay.sh
 - 复制 overlay 源文件到 `hid_core/frontend/`
 - 打 controller patch（不需要 CPM/Lua/CMake 改动）
