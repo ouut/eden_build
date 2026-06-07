@@ -1,5 +1,5 @@
---- a/src/hid_core/CMakeLists.txt
-+++ b/src/hid_core/CMakeLists.txt
+--- a/src/hid_core/CMakeLists.txt	2026-06-07 03:01:04
++++ b/src/hid_core/CMakeLists.txt	2026-06-07 03:02:39
 @@ -9,6 +9,9 @@
      frontend/emulated_console.h
      frontend/emulated_controller.cpp

@@ -1,10 +1,11 @@
---- a/src/hid_core/frontend/emulated_controller.cpp
-+++ b/src/hid_core/frontend/emulated_controller.cpp
-@@ -1919,6 +1919,8 @@
+--- a/src/hid_core/frontend/emulated_controller.cpp	2026-06-07 03:01:04
++++ b/src/hid_core/frontend/emulated_controller.cpp	2026-06-07 03:02:39
+@@ -1918,6 +1918,8 @@
+         }
          device->ForceUpdate();
      }
-
++
 +    ApplyOverlay(npad_id_type, controller);
  }
-
+ 
  NpadButton EmulatedController::GetTurboButtonMask() const {

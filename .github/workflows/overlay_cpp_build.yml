@@ -18,6 +18,6 @@ jobs:
     with:
       devel: "true"
       build-id: 'test'
-      ref: ${{ inputs.ref }}
+      ref: 'v0.2.1'
       patch-type: 'overlay-cpp'
     secrets: inherit
