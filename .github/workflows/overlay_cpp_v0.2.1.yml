@@ -1,0 +1,16 @@
+name: "Overlay C++ v0.2.1"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    with:
+      devel: "true"
+      build-id: 'test'
+      ref: 'v0.2.1'
+      patch-type: 'overlay-cpp'
+      patches-dir: 'patches_v0.2.1'
+    secrets: inherit

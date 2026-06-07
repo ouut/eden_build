@@ -21,6 +21,11 @@ on:
         type: string
         required: false
         default: 'none'
+      patches-dir:
+        description: 'Subdirectory containing overlay patches (e.g. patches_v0.2.1)'
+        type: string
+        required: false
+        default: 'patches'
 
 env:
   BUILD_REF: ${{ inputs.ref }}
@@ -91,9 +96,10 @@ jobs:
           cp overlay/overlay_state.h "$FRONTEND/"
           cp overlay/overlay_udp.h   "$FRONTEND/"
           cp overlay/overlay_udp.cpp "$FRONTEND/"
-          patch -p1 -d eden < patches/emulated_controller.h.patch
-          patch -p1 -d eden < patches/emulated_controller.cpp.patch
-          patch -p1 -d eden < patches/CMakeLists_hid_core.txt.patch
+          PDIR="${{ inputs.patches-dir }}"
+          patch -p1 -d eden < "$PDIR"/emulated_controller.h.patch
+          patch -p1 -d eden < "$PDIR"/emulated_controller.cpp.patch
+          patch -p1 -d eden < "$PDIR"/CMakeLists_hid_core.txt.patch
           grep -q 'ApplyOverlay' eden/src/hid_core/frontend/emulated_controller.cpp && \
             echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
             echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
