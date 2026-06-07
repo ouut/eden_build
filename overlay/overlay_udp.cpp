@@ -11,6 +11,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 using socklen_t = int;
+using ssize_t = SSIZE_T;
 #define CLOSE_SOCKET closesocket
 #else
 #include <arpa/inet.h>
