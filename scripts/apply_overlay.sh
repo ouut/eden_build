@@ -21,7 +21,7 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"            # overlay_cpp root
 
 EDEN_DIR="${1:-"$ROOT_DIR/../eden_build"}"
 EDEN_SRC="$EDEN_DIR/eden/src/hid_core/frontend"
-PATCH_DIR="$ROOT_DIR/patches"
+PATCH_DIR="$ROOT_DIR/patches_v0.2.1"
 
 if [ ! -d "$EDEN_SRC" ]; then
     echo "ERROR: Eden source directory not found: $EDEN_SRC"
