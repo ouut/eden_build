@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OVER protocol test sender.  Sends 80-byte UDP packets matching the
+OVER protocol test sender.  Sends 84-byte UDP packets matching the
 Eden Overlay C++ protocol.
 
 Usage:
@@ -34,8 +34,8 @@ import struct
 import sys
 import time
 
-PACKET_FMT = "<4sB3xII16f"
-PACKET_SIZE = struct.calcsize(PACKET_FMT)  # 80
+PACKET_FMT = "<4sB3xIQ16f"
+PACKET_SIZE = struct.calcsize(PACKET_FMT)  # 84
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # control_mask bits
@@ -100,7 +100,7 @@ ALL_BUTTONS = set(BUTTON_BITS.keys())  # canonical names for the help text
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class OverSender:
-    """Build and send OVER protocol packets (80-byte, with control_mask)."""
+    """Build and send OVER protocol packets (84-byte, with control_mask)."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 26760, pad_id: int = 0):
         self.host = host
@@ -318,7 +318,7 @@ def _button_names() -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OVER protocol test sender (80-byte packets, with control_mask)",
+        description="OVER protocol test sender (84-byte packets, with control_mask)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
