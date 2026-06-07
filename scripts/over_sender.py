@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OVER protocol test sender.  Sends 76-byte UDP packets matching the
+OVER protocol test sender.  Sends 80-byte UDP packets matching the
 Eden Overlay C++ protocol.
 
 Usage:
@@ -11,13 +11,21 @@ Usage:
   python3 scripts/over_sender.py motion gyro 0 0.1 0  # left gyro Y=0.1 rad/s
   python3 scripts/over_sender.py --host 192.168.1.100 --port 26760 A
 
+control_mask is computed automatically: whichever fields you set via buttons(),
+stick(), or motion() have their mask bits asserted.  The sender only touches
+the fields you asked for; all others remain under physical control.
+
+You can also set the mask explicitly:
+  sender.control(buttons=True, left_x=True)  # manual override
+
 As a module:
   from scripts.over_sender import OverSender
 
   sender = OverSender(pad_id=0)
-  sender.buttons(A=True, B=True)
-  sender.stick(side="left", x=0.5, y=0)
+  sender.buttons(A=True, B=True)               # auto-sets control_mask bit 0
+  sender.stick(side="left", x=0.5, y=0)        # auto-sets bits 1,2
   sender.send()
+  # Result: buttons OR-merged, left stick controlled, right stick untouched
 """
 
 import argparse
@@ -26,8 +34,34 @@ import struct
 import sys
 import time
 
-PACKET_FMT = "<4sB3xI16f"
-PACKET_SIZE = struct.calcsize(PACKET_FMT)  # 76
+PACKET_FMT = "<4sB3xII16f"
+PACKET_SIZE = struct.calcsize(PACKET_FMT)  # 80
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# control_mask bits
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CTRL_BUTTON     = 1 << 0   # button_mask
+CTRL_LEFT_X     = 1 << 1   # left_x
+CTRL_LEFT_Y     = 1 << 2   # left_y
+CTRL_RIGHT_X    = 1 << 3   # right_x
+CTRL_RIGHT_Y    = 1 << 4   # right_y
+CTRL_LEFT_GYRO  = 1 << 5   # left_gyro (xyz as a group)
+CTRL_LEFT_ACCEL = 1 << 6   # left_accel (xyz as a group)
+CTRL_RIGHT_GYRO = 1 << 7   # right_gyro (xyz as a group)
+CTRL_RIGHT_ACCEL= 1 << 8   # right_accel (xyz as a group)
+
+CTRL_NAMES = {
+    CTRL_BUTTON:     "buttons",
+    CTRL_LEFT_X:     "left_x",
+    CTRL_LEFT_Y:     "left_y",
+    CTRL_RIGHT_X:    "right_x",
+    CTRL_RIGHT_Y:    "right_y",
+    CTRL_LEFT_GYRO:  "left_gyro",
+    CTRL_LEFT_ACCEL: "left_accel",
+    CTRL_RIGHT_GYRO: "right_gyro",
+    CTRL_RIGHT_ACCEL:"right_accel",
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Switch NpadButton bit layout  (matches Eden hid_types.h NpadButton enum)
@@ -66,13 +100,14 @@ ALL_BUTTONS = set(BUTTON_BITS.keys())  # canonical names for the help text
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class OverSender:
-    """Build and send OVER protocol packets."""
+    """Build and send OVER protocol packets (80-byte, with control_mask)."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 26760, pad_id: int = 0):
         self.host = host
         self.port = port
         self.pad_id = pad_id
 
+        # Values
         self._button_mask = 0
         self._left = (0.0, 0.0)
         self._right = (0.0, 0.0)
@@ -81,16 +116,61 @@ class OverSender:
         self._right_gyro = (0.0, 0.0, 0.0)
         self._right_accel = (0.0, 0.0, 1.0)
 
+        # control_mask — auto-managed: set when you call helpers
+        self._ctrl = 0
+
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    # ── explicit control mask ─────────────────────────────────────────────
+
+    def control(self, **kwargs) -> "OverSender":
+        """
+        Explicitly set/clear control_mask bits.
+            sender.control(buttons=True, left_x=True, right_gyro=False)
+
+        Valid keys: buttons, left_x, left_y, right_x, right_y,
+                    left_gyro, left_accel, right_gyro, right_accel
+        """
+        _key_to_bit = {
+            "buttons":     CTRL_BUTTON,
+            "left_x":      CTRL_LEFT_X,
+            "left_y":      CTRL_LEFT_Y,
+            "right_x":     CTRL_RIGHT_X,
+            "right_y":     CTRL_RIGHT_Y,
+            "left_gyro":   CTRL_LEFT_GYRO,
+            "left_accel":  CTRL_LEFT_ACCEL,
+            "right_gyro":  CTRL_RIGHT_GYRO,
+            "right_accel": CTRL_RIGHT_ACCEL,
+        }
+        for key, state in kwargs.items():
+            bit = _key_to_bit.get(key)
+            if bit is None:
+                raise ValueError(f"Unknown control key: {key!r}")
+            if state:
+                self._ctrl |= bit
+            else:
+                self._ctrl &= ~bit
+        return self
+
+    def clear_control(self) -> "OverSender":
+        """Clear all control_mask bits (overlay controls nothing)."""
+        self._ctrl = 0
+        return self
+
+    @property
+    def control_mask(self) -> int:
+        """Current control_mask value (read-only)."""
+        return self._ctrl
 
     # ── fluent helpers ────────────────────────────────────────────────────
 
     def buttons(self, **kwargs) -> "OverSender":
         """
-        Set button mask.  Pass button names as keyword args:
+        Set button mask.  Auto-sets control_mask bit 0.
             sender.buttons(A=True, B=True, L=False)
         Omitting a button leaves it at its current state.
         """
+        self._ctrl |= CTRL_BUTTON
         for name, state in kwargs.items():
             canon = ALIASES.get(name.lower(), name.upper())
             if canon not in BUTTON_BITS:
@@ -106,31 +186,43 @@ class OverSender:
         return self
 
     def stick(self, side: str, x: float, y: float) -> "OverSender":
-        """Set stick position.  side='left' or 'right'.  x,y: -1.0..1.0"""
+        """
+        Set stick position.  Auto-sets control_mask bits for the axes set.
+            sender.stick('left', 0.5, 0)    # sets left_x, left_y ctrl bits
+        side='left' or 'right'.  x,y: -1.0..1.0
+        """
         if side == "left":
             self._left = (x, y)
+            self._ctrl |= CTRL_LEFT_X | CTRL_LEFT_Y
         elif side == "right":
             self._right = (x, y)
+            self._ctrl |= CTRL_RIGHT_X | CTRL_RIGHT_Y
         else:
             raise ValueError(f"Unknown stick side: {side!r} (use 'left' or 'right')")
         return self
 
     def motion(self, source: str, gyro: tuple = None, accel: tuple = None) -> "OverSender":
         """
-        Set motion data.  source='left' or 'right'.
+        Set motion data.  Auto-sets control_mask bits for the groups set.
+            sender.motion('left', gyro=(0.1, 0, 0))
+        source='left' or 'right'.
         gyro:  (x, y, z) in rad/s
         accel: (x, y, z) in G
         """
         if source == "left":
             if gyro is not None:
                 self._left_gyro = gyro
+                self._ctrl |= CTRL_LEFT_GYRO
             if accel is not None:
                 self._left_accel = accel
+                self._ctrl |= CTRL_LEFT_ACCEL
         elif source == "right":
             if gyro is not None:
                 self._right_gyro = gyro
+                self._ctrl |= CTRL_RIGHT_GYRO
             if accel is not None:
                 self._right_accel = accel
+                self._ctrl |= CTRL_RIGHT_ACCEL
         else:
             raise ValueError(f"Unknown motion source: {source!r} (use 'left' or 'right')")
         return self
@@ -138,10 +230,10 @@ class OverSender:
     # ── build & send ──────────────────────────────────────────────────────
 
     def pack(self) -> bytes:
-        """Build the 76-byte packet.  Returns bytes."""
+        """Build the 80-byte packet.  Returns bytes."""
         return struct.pack(
             PACKET_FMT,
-            b"OVER", self.pad_id, self._button_mask,
+            b"OVER", self.pad_id, self._ctrl, self._button_mask,
             *self._left, *self._right,
             *self._left_gyro, *self._left_accel,
             *self._right_gyro, *self._right_accel,
@@ -194,14 +286,24 @@ def _parse_buttons(args: list) -> dict:
 
 def _hold_loop(sender: OverSender, interval: float = 1.0 / 60) -> None:
     """Send packets at ~60 Hz until interrupted."""
+    ctrl_desc = _format_ctrl(sender.control_mask)
     print(f"Sending to {sender.host}:{sender.port} pad={sender.pad_id} "
-          f"every {interval*1000:.0f}ms  (Ctrl-C to stop)")
+          f"ctrl=[{ctrl_desc}] every {interval*1000:.0f}ms  (Ctrl-C to stop)")
     try:
         while True:
             sender.send()
             time.sleep(interval)
     except KeyboardInterrupt:
         print()
+
+
+def _format_ctrl(mask: int) -> str:
+    """Format control_mask bits as human-readable string."""
+    parts = []
+    for bit, name in sorted(CTRL_NAMES.items()):
+        if mask & bit:
+            parts.append(name)
+    return ", ".join(parts) if parts else "(none)"
 
 
 def _button_names() -> str:
@@ -216,7 +318,7 @@ def _button_names() -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OVER protocol test sender (76-byte packets)",
+        description="OVER protocol test sender (80-byte packets, with control_mask)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
@@ -263,8 +365,10 @@ def main():
         _hold_loop(sender)
     else:
         sender.send()
+        ctrl_desc = _format_ctrl(sender.control_mask)
         btn_display = ", ".join(args.action) or "(no buttons)"
-        print(f"Sent 1 packet to {sender.host}:{sender.port}  pad={sender.pad_id}  [{btn_display}]")
+        print(f"Sent 1 packet to {sender.host}:{sender.port}  pad={sender.pad_id}"
+              f"  ctrl=[{ctrl_desc}]  [{btn_display}]")
 
     sender.close()
 
