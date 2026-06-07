@@ -18,11 +18,9 @@ using socklen_t = int;
 #include <sys/socket.h>
 #include <unistd.h>
 #define CLOSE_SOCKET close
-#define SOCKET_ERROR (-1)
 #endif
 
 #include "common/logging.h"
-#include "common/scope_exit.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/frontend/overlay_state.h"
 #include "hid_core/hid_types.h"
@@ -142,7 +140,9 @@ void InitOverlayUdp(u16 port) {
     ioctlsocket(overlay_socket, FIONBIO, &mode);
 #else
     const int flags = fcntl(overlay_socket, F_GETFL, 0);
-    fcntl(overlay_socket, F_SETFL, flags | O_NONBLOCK);
+    if (flags >= 0) {
+        fcntl(overlay_socket, F_SETFL, flags | O_NONBLOCK);
+    }
 #endif
 
     // Reuse address (safe restart)
@@ -184,12 +184,12 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
     if (overlay_socket >= 0) {
         u8 buf[OverlayProtocol::PACKET_SIZE];
         sockaddr_in from{};
-        socklen_t fromlen = sizeof(from);
 
         // Consume ALL buffered packets for this frame.
         // For each pad, only the last packet survives (later packets
         // overwrite earlier ones in overlay_states).
         while (true) {
+            socklen_t addrlen = sizeof(from);
             const ssize_t n = recvfrom(overlay_socket,
 #ifdef _WIN32
                                        reinterpret_cast<char*>(buf),
@@ -197,7 +197,7 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
                                        buf,
 #endif
                                        sizeof(buf), 0,
-                                       reinterpret_cast<sockaddr*>(&from), &fromlen);
+                                       reinterpret_cast<sockaddr*>(&from), &addrlen);
             if (n <= 0) {
                 break; // no more packets (EAGAIN/EWOULDBLOCK or error)
             }
