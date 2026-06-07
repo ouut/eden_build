@@ -1,4 +1,4 @@
-name: "DSU Build"
+name: "Overlay C++ Build"
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       ref:
         description: |
           Git ref to build. Empty = latest master.
-          Examples: v0.2.1 (release tag)  |  v0.2.0-rc2 (pre-release)  |  ec2b9b0 (commit SHA)  |  master (branch)
+          Examples: v0.2.1 (release tag)  |  ec2b9b0 (commit SHA)  |  master (branch)
         type: string
         required: false
         default: ''
@@ -17,6 +17,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       devel: "true"
-      build-id: 'nightly'
+      build-id: 'test'
       ref: ${{ inputs.ref }}
+      patch-type: 'overlay-cpp'
     secrets: inherit
