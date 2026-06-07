@@ -1,0 +1,61 @@
+name: "Overlay Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: |
+          Git ref to build. Empty = latest master.
+          Examples: v0.2.1 (release tag)  |  ec2b9b0 (commit SHA)  |  master (branch)
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    with:
+      devel: "true"
+      build-id: 'nightly'
+      ref: ${{ inputs.ref }}
+    secrets: inherit
+
+  release:
+    name: "Create Release"
+    needs: [build]
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -lhR artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Eden Overlay - ${{ inputs.ref || 'latest' }}"
+          tag_name: "overlay-${{ github.run_number }}"
+          prerelease: true
+          make_latest: true
+          files: artifacts/*
+          body: |
+            Eden with C++ Overlay input support.
+
+            - **Ref**: `${{ inputs.ref || 'master (latest)' }}`
+            - 84-byte OVER protocol (UDP listener)
+            - control_mask per-axis gating for stick/motion
+            - Staleness timeout 100ms, per-pad independent
+            - Button OR merge, stick/motion direct overwrite
+
+            ## Builds
+            - **macOS** (Apple Silicon)
+            - **Windows** (MinGW)
+            - **Linux** (AppImage)

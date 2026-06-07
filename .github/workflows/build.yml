@@ -31,7 +31,6 @@ env:
 
 jobs:
   clone:
-    if: false  # disabled
     outputs:
       cachever: ${{ steps.out.outputs.cachever }}
       pgo: ${{ steps.out.outputs.pgo }}
