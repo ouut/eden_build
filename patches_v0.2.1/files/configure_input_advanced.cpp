@@ -168,8 +168,8 @@ void ConfigureInputAdvanced::ApplyConfiguration() {
           QMessageBox::warning(this, tr("Port In Use"),
             tr("Port %1 is in use. Please choose a different port.")
             .arg(Settings::values.overlay_port.GetValue()));
-          ui->overlay_enabled->setChecked(false); close(s); s = -1; }
-        if (s >= 0) close(s); }}
+          ui->overlay_enabled->setChecked(false); ::close(s); s = -1; }
+        if (s >= 0) ::close(s); }}
     Settings::values.overlay_enabled = ui->overlay_enabled->isChecked();
 
 }
