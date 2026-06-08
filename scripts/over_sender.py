@@ -227,6 +227,40 @@ class OverSender:
             raise ValueError(f"Unknown motion source: {source!r} (use 'left' or 'right')")
         return self
 
+    # ── convenience: tap ─────────────────────────────────────────────────
+
+    def tap(self, *buttons: str, duration: float = 0.05) -> "OverSender":
+        """
+        Press and release button(s) in one call.  Sends two packets:
+        press → wait duration → release → send.
+        Use for quick button taps from Jupyter/scripts.
+            sender.tap("A")           # single tap
+            sender.tap("A", "B")      # combo tap
+        """
+        self.buttons(**{b: True for b in buttons})
+        self.send()
+        if duration > 0:
+            import time
+            time.sleep(duration)
+        self.clear_buttons()
+        self.send()
+        return self
+
+    def stick_tap(self, side: str, x: float, y: float, duration: float = 0.05) -> "OverSender":
+        """
+        Flick a stick in one direction then release.  Sends two packets.
+            sender.stick_tap("left", 1.0, 0)   # flick left stick right
+            sender.stick_tap("right", 0, -1.0)  # flick right stick down
+        """
+        self.stick(side, x, y)
+        self.send()
+        if duration > 0:
+            import time
+            time.sleep(duration)
+        self.stick(side, 0, 0)
+        self.send()
+        return self
+
     # ── build & send ──────────────────────────────────────────────────────
 
     def pack(self) -> bytes:
