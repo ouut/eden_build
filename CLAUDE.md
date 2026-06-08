@@ -9,39 +9,52 @@
   - 按键：OR 合并（任一方按下即生效）
   - 摇杆/体感：**control_mask 控制哪些字段走 overlay**。声明由 overlay 控制的轴直接覆盖物理值（不比较时间戳）；未声明的轴保留物理值，不受 overlay 影响。staleness 是唯一的退出机制。
 
-## 为什么需要打 patch（不能只往文件末尾追加）
-- `#include "overlay_udp.h"` 必须插入 `emulated_controller.cpp` 的 include 区域
-- `ApplyOverlay()` 调用必须插入 `StatusUpdate()` 函数体末尾
-- 两者都在文件中部，追加到文件末尾无效
+## 集成方式：完整文件替换（不是 diff patch）
+
+不使用 `.patch` 文件。采用**完整文件替换**——把修改后的 Eden 源文件完整保存在仓库里，构建时直接 `cp` 覆盖。
+
+原因：
+- diff patch 依赖行号、上下文精确匹配，Eden 版本一变就挂
+- 完整文件替换：只要指定 Eden 版本，文件一定正确，零失败
+- 下次新版本：从新版本源码复制 → 手工/脚本改动 → 保存为 `patches_vX.X.X/files/`
 
 ## 目录结构
 ```
-overlay_cpp/                         # 本仓库 — 设计文档 + overlay 源文件 + 脚本
-├── CLAUDE.md                        # 本文件
-├── overlay/
-│   ├── overlay_state.h              # OverlayState 结构体
-│   ├── overlay_udp.h                # UDP 监听 + 协议解析 + ApplyOverlay
-│   └── overlay_udp.cpp
-├── patches/
-│   ├── emulated_controller.h.patch
-│   └── emulated_controller.cpp.patch
+overlay_cpp/                              # 本仓库
+├── CLAUDE.md
+├── overlay/                              # 新增文件 — 直接复制到 Eden
+│   ├── overlay_state.h                   # OverlayState 结构体 + 常量
+│   ├── overlay_udp.h                     # InitOverlayUdp / ApplyOverlay 声明
+│   └── overlay_udp.cpp                   # UDP socket + 协议解析 + merge
+├── patches_v0.2.1/                       # v0.2.1 的修改文件
+│   ├── files/                            # 完整修改后的 Eden 源文件，直接 cp 覆盖
+│   │   ├── settings.h                    #   + overlay_enabled + overlay_port
+│   │   ├── emulated_controller.h         #   + #include "overlay_udp.h"
+│   │   ├── emulated_controller.cpp       #   + ApplyOverlay() 调用
+│   │   ├── CMakeLists_hid_core.txt       #   + overlay 源文件到构建
+│   │   ├── configure_input_advanced.ui   #   + checkbox + port spinbox
+│   │   └── configure_input_advanced.cpp  #   + port 测试 + 读写逻辑
+│   └── apply_changes.sh                  # 记录修改过程的 sed 脚本（可重复）
 ├── scripts/
-│   ├── apply_overlay.sh             # 复制 overlay 文件到 eden 并打 patch
-│   └── over_sender.py               # OVER 协议测试发送工具
-└── docs/
-    └── ARCHITECTURE.md
+│   ├── apply_overlay.sh                  # 一键集成：cp overlay 文件 + cp files/
+│   └── over_sender.py                    # OVER 协议测试发送工具
+└── tests/
+    ├── test_packet.py                     # 54 tests — 协议包格式
+    ├── test_merge.py                      # 28 tests — 合并逻辑模拟
+    └── test_integration.py                # 31 tests — 真实 UDP 收发
 
-eden_build/eden/src/                 # Eden 模拟器源码 — 被 patch 的目标
-├── common/settings.h                # 加 2 个 overlay setting
-├── hid_core/frontend/
-│   ├── emulated_controller.h        # 被 patch：加 #include overlay_udp.h
-│   ├── emulated_controller.cpp      # 被 patch：StatusUpdate 末尾加 ApplyOverlay()
-│   ├── overlay_state.h              # 从 overlay_cpp 复制
-│   ├── overlay_udp.h                # 从 overlay_cpp 复制
-│   └── overlay_udp.cpp              # 从 overlay_cpp 复制
-└── yuzu/configuration/
-    ├── configure_input_advanced.ui  # 加 enable_overlay checkbox + overlay_port spinbox
-    └── configure_input_advanced.cpp # 读写两个新控件
+CI 构建时的文件操作（build.yml Apply Overlay 步骤）：
+  1. cp overlay/overlay_state.h         → eden/src/hid_core/frontend/
+  2. cp overlay/overlay_udp.h           → eden/src/hid_core/frontend/
+  3. cp overlay/overlay_udp.cpp         → eden/src/hid_core/frontend/
+  4. cp files/settings.h                → eden/src/common/           (替换)
+  5. cp files/emulated_controller.h     → eden/src/hid_core/frontend/(替换)
+  6. cp files/emulated_controller.cpp   → eden/src/hid_core/frontend/(替换)
+  7. cp files/CMakeLists_hid_core.txt   → eden/src/hid_core/CMakeLists.txt(替换)
+  8. cp files/configure_input_advanced.ui   → eden/src/yuzu/configuration/(替换)
+  9. cp files/configure_input_advanced.cpp  → eden/src/yuzu/configuration/(替换)
+
+共 9 个 cp，3 个新文件 + 6 个替换文件。无 diff，无 patch，无行号依赖。
 ```
 
 ## 典型使用场景
@@ -108,11 +121,12 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& c) {
 ```
 模拟器启动时调用 `InitOverlayUdp`。不需要 Stop 函数——进程退出时 OS 回收 socket。overlay 关闭时 close socket 并置 -1。
 
-### 8. apply_overlay.sh：三个动作
+### 8. 本地集成：`scripts/apply_overlay.sh`
 ```bash
-# 1. 复制 overlay/*.h overlay/*.cpp 到 $EDEN_SRC/hid_core/frontend/
-# 2. 对 emulated_controller.h 打 patch（加 #include "overlay_udp.h"）
-# 3. 对 emulated_controller.cpp 打 patch（StatusUpdate 末尾加 ApplyOverlay）
+# 9 个 cp 操作，覆盖本地 eden_build：
+#   3 个新文件：overlay_state.h, overlay_udp.h, overlay_udp.cpp → hid_core/frontend/
+#   6 个替换文件：patches_v0.2.1/files/* → Eden 源码对应位置
+./scripts/apply_overlay.sh /path/to/eden_build
 ```
 
 ### 9. 端口占用：UI 中实时检测 + 显示失败
@@ -378,16 +392,30 @@ Settings::values.overlay_port = port;
 
 ---
 
-## 待创建的文件
+## 新版本适配流程
 
-| 文件 | 说明 |
-|---|---|
-| `overlay/overlay_state.h` | OverlayState 结构体定义 |
-| `overlay/overlay_udp.h` | InitOverlayUdp() 和 ApplyOverlay() 声明 |
-| `overlay/overlay_udp.cpp` | UDP socket 管理 + 协议解析 + ApplyOverlay 实现 |
-| `patches/emulated_controller.h.patch` | 给 .h 加 #include |
-| `patches/emulated_controller.cpp.patch` | 给 .cpp 加 ApplyOverlay() 调用 |
-| `scripts/apply_overlay.sh` | 复制 + 打 patch 的一键脚本 |
-| `scripts/over_sender.py` | ✅ 已存在，需更新到 84-byte 格式 |
-| `docs/ARCHITECTURE.md` | 架构文档（可选） |
+当 Eden 发布新版本（如 v0.3.0）时：
+
+```bash
+# 1. 获取新版源码
+git clone --branch v0.3.0 https://git.eden-emu.dev/eden-emu/eden.git eden_v0.3.0
+
+# 2. 创建新 patches 目录
+mkdir -p patches_v0.3.0/files
+
+# 3. 从新版源码复制 6 个文件到 files/
+cp eden_v0.3.0/src/common/settings.h                              patches_v0.3.0/files/
+cp eden_v0.3.0/src/hid_core/frontend/emulated_controller.h        patches_v0.3.0/files/
+cp eden_v0.3.0/src/hid_core/frontend/emulated_controller.cpp      patches_v0.3.0/files/
+cp eden_v0.3.0/src/hid_core/CMakeLists.txt                         patches_v0.3.0/files/CMakeLists_hid_core.txt
+cp eden_v0.3.0/src/yuzu/configuration/configure_input_advanced.ui patches_v0.3.0/files/
+cp eden_v0.3.0/src/yuzu/configuration/configure_input_advanced.cpp patches_v0.3.0/files/
+
+# 4. 参照 patches_v0.2.1/apply_changes.sh，手工在新版文件上做修改
+# 5. 验证修改正确
+grep 'ApplyOverlay' patches_v0.3.0/files/emulated_controller.cpp
+grep 'overlay_enabled' patches_v0.3.0/files/settings.h
+
+# 6. 创建 overlay_cpp_v0.3.0.yml workflow，patches-dir 指向 patches_v0.3.0
+```
 ,   
