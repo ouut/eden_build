@@ -248,11 +248,17 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
 
     const u32 ctrl = state.control_mask;
 
-    // ── Buttons: OR merge (bit 0) ───────────────────────────────────────
+    // ── Buttons: clear prev + apply new ──────────────────────────────────
+    // Eden only Assign()s individual bits when physical buttons change.
+    // A blind OR would accumulate overlay bits across frames because Eden
+    // never resets npad_button_state.raw.  Instead we clear the overlay
+    // contribution from the last frame, then set this frame's buttons.
     if (ctrl & OverlayControl::BUTTON) {
-        const u64 raw_val =
-            static_cast<u64>(controller.npad_button_state.raw) | state.button_mask;
+        u64 raw_val = static_cast<u64>(controller.npad_button_state.raw);
+        raw_val &= ~state.button_mask_prev;          // undo last frame
+        raw_val |= state.button_mask;                 // apply this frame
         controller.npad_button_state.raw = static_cast<NpadButton>(raw_val);
+        state.button_mask_prev = state.button_mask;
     }
 
     // ── Left stick ──────────────────────────────────────────────────────

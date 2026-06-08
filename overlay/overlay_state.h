@@ -37,7 +37,8 @@ struct OverlayState {
     f32 right_gyro_x{0}, right_gyro_y{0}, right_gyro_z{0};   // rad/s
     f32 right_accel_x{0}, right_accel_y{0}, right_accel_z{0}; // G
 
-    // Metadata
+    // Merge tracking
+    u64 button_mask_prev{0};///< previous frame's button_mask (for clearing stale OR bits)
     u64 last_update{0};     ///< steady_clock timestamp (us) of last received packet
     bool active{false};     ///< false when stale — ApplyOverlay skips this pad
 };
