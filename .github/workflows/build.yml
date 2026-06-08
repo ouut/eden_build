@@ -96,16 +96,17 @@ jobs:
           cp overlay/overlay_state.h "$FRONTEND/"
           cp overlay/overlay_udp.h   "$FRONTEND/"
           cp overlay/overlay_udp.cpp "$FRONTEND/"
-          PDIR="${{ inputs.patches-dir }}"
-          patch -p1 -d eden < "$PDIR"/emulated_controller.h.patch
-          patch -p1 -d eden < "$PDIR"/emulated_controller.cpp.patch
-          patch -p1 -d eden < "$PDIR"/CMakeLists_hid_core.txt.patch
-          patch -p1 -d eden < "$PDIR"/settings_ui.patch
-          patch -p1 -d eden < "$PDIR"/configure_input_advanced_ui.patch
-          patch -p1 -d eden < "$PDIR"/configure_input_advanced_cpp.patch
+          # Replace full files (patches_vX.X.X/files/)
+          FD="${{ inputs.patches-dir }}/files"
+          cp "$FD"/emulated_controller.h           eden/src/hid_core/frontend/
+          cp "$FD"/emulated_controller.cpp         eden/src/hid_core/frontend/
+          cp "$FD"/CMakeLists_hid_core.txt         eden/src/hid_core/CMakeLists.txt
+          cp "$FD"/settings.h                      eden/src/common/
+          cp "$FD"/configure_input_advanced.ui     eden/src/yuzu/configuration/
+          cp "$FD"/configure_input_advanced.cpp    eden/src/yuzu/configuration/
           grep -q 'ApplyOverlay' eden/src/hid_core/frontend/emulated_controller.cpp && \
           grep -q 'overlay_enabled' eden/src/yuzu/configuration/configure_input_advanced.cpp && \
-            echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
+            echo "Overlay C++ integrated successfully" || { echo "Overlay integration FAILED"; exit 1; }
 
 
       - name: Apply Overlay (Lua)
