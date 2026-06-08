@@ -4,6 +4,8 @@
 #pragma once
 
 #include <array>
+#include <string>
+#include <vector>
 #include "common/common_types.h"
 #include "hid_core/hid_types.h"   // NpadIdType
 
@@ -12,6 +14,14 @@ namespace Core::HID {
 struct ControllerStatus;
 struct OverlayState;
 extern std::array<OverlayState, 8> overlay_states;
+
+// Log levels: 0=off, 1=packet, 2=merge, 3=verbose
+void SetOverlayLogLevel(int level);
+int  GetOverlayLogLevel();
+void OverlayLog(int level, const char* fmt, ...);
+/// Ring buffer for overlay debug log (read by UI, last 500 lines)
+std::vector<std::string>& GetOverlayLog();
+void ClearOverlayLog();
 
 /**
  * Initialize the overlay UDP listener on the given port.

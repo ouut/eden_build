@@ -79,6 +79,22 @@ void test_merge_logic() {
     CHECK(static_cast<u64>(c3.npad_button_state.raw) == 1, "release: only phys A");
     CHECK((static_cast<u64>(c3.npad_button_state.raw) & 2) == 0, "release: B cleared");
 
+    // -- Test 3b: Packet update must preserve button_mask_prev --
+    // Simulates a new UDP packet arriving that overwrites overlay_states
+    OverlayState packet;
+    packet.control_mask = OverlayControl::BUTTON;
+    packet.button_mask = 0; // release
+    packet.active = true;
+    packet.button_mask_prev = 0; // ParsePacket sets this to 0 (fresh state)
+    // BUT: we preserve it before the assignment
+    packet.button_mask_prev = overlay_states[0].button_mask_prev;
+    packet.last_update = Now();
+    overlay_states[0] = packet;
+    ControllerStatus c3b;
+    ApplyOverlay(NpadIdType::Player1, c3b);
+    CHECK((static_cast<u64>(c3b.npad_button_state.raw) & 1) == 0,
+        "packet update: prev preserved, A cleared");
+
     // -- Test 4: Stick write --
     ControllerStatus c4;
     auto& s4 = overlay_states[0];

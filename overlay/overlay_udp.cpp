@@ -21,6 +21,9 @@ using ssize_t = SSIZE_T;
 #define CLOSE_SOCKET close
 #endif
 
+#include <cstdarg>
+#include <cstdio>
+#include <mutex>
 #include "common/logging.h"
 #include "common/settings.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -124,6 +127,35 @@ u64 NowUs() {
 /// Overlay state per pad (0-7).  Extern for testing.
 std::array<OverlayState, 8> overlay_states{};
 
+/// Ring buffer for debug log (read by UI).  Keep last 500 lines.
+static std::vector<std::string> overlay_log;
+static std::mutex overlay_log_mutex;
+static int overlay_log_level = 1; // 0=off, 1=packet, 2=merge, 3=verbose
+static constexpr std::size_t MAX_LOG_LINES = 500;
+
+void SetOverlayLogLevel(int level) { overlay_log_level = level; }
+int  GetOverlayLogLevel() { return overlay_log_level; }
+std::vector<std::string>& GetOverlayLog() { return overlay_log; }
+
+void ClearOverlayLog() {
+    std::lock_guard<std::mutex> lock(overlay_log_mutex);
+    overlay_log.clear();
+}
+
+void OverlayLog(int level, const char* fmt, ...) {
+    if (level > overlay_log_level) return;
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    std::lock_guard<std::mutex> lock(overlay_log_mutex);
+    overlay_log.push_back(buf);
+    if (overlay_log.size() > MAX_LOG_LINES)
+        overlay_log.erase(overlay_log.begin(),
+            overlay_log.begin() + (overlay_log.size() - MAX_LOG_LINES));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public API
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -186,12 +218,12 @@ void ShutdownOverlayUdp() {
 }
 
 void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
-    // ── Lazy init: first call reads settings and starts UDP listener ────
+    // ── Lazy init ────────────────────────────────────────────────────────
     if (overlay_socket < 0) {
         if (Settings::values.overlay_enabled) {
+            OverlayLog(1, "INIT port=%u", Settings::values.overlay_port.GetValue());
             InitOverlayUdp(Settings::values.overlay_port.GetValue());
         }
-        // If still disabled (port in use or setting off), nothing to do
     }
 
     // ── Drain incoming UDP packets ──────────────────────────────────────
@@ -226,7 +258,13 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
 
             OverlayState state;
             if (ParsePacket(buf, static_cast<std::size_t>(n), state)) {
+                state.button_mask_prev = overlay_states[pad_id].button_mask_prev;
                 state.last_update = NowUs();
+                OverlayLog(1, "RECV pad=%u ctrl=0x%x btn=0x%llx prev=0x%llx l=(%.2f,%.2f) r=(%.2f,%.2f)",
+                    pad_id, state.control_mask,
+                    (unsigned long long)state.button_mask,
+                    (unsigned long long)state.button_mask_prev,
+                    state.left_x, state.left_y, state.right_x, state.right_y);
                 overlay_states[pad_id] = state;
             }
         }
@@ -246,8 +284,9 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
     // ── Staleness check ─────────────────────────────────────────────────
     const u64 now = NowUs();
     if (now - state.last_update > OverlayProtocol::STALENESS_US) {
+        OverlayLog(1, "STALE pad=%u age=%lluus → deactivating", pad_idx, now - state.last_update);
         state.active = false;
-        return; // timed out — physical input fully in control
+        return;
     }
 
     const u32 ctrl = state.control_mask;
@@ -258,10 +297,16 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
     // never resets npad_button_state.raw.  Instead we clear the overlay
     // contribution from the last frame, then set this frame's buttons.
     if (ctrl & OverlayControl::BUTTON) {
-        u64 raw_val = static_cast<u64>(controller.npad_button_state.raw);
-        raw_val &= ~state.button_mask_prev;          // undo last frame
-        raw_val |= state.button_mask;                 // apply this frame
+        const u64 phys = static_cast<u64>(controller.npad_button_state.raw);
+        u64 raw_val = phys;
+        raw_val &= ~state.button_mask_prev;
+        raw_val |= state.button_mask;
         controller.npad_button_state.raw = static_cast<NpadButton>(raw_val);
+        OverlayLog(2, "MERGE pad=%u phys=0x%llx prev=0x%llx new=0x%llx => 0x%llx",
+            pad_idx, (unsigned long long)phys,
+            (unsigned long long)state.button_mask_prev,
+            (unsigned long long)state.button_mask,
+            (unsigned long long)raw_val);
         state.button_mask_prev = state.button_mask;
     }
 
