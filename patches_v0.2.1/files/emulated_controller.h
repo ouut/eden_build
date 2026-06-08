@@ -25,6 +25,7 @@
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
 #include "hid_core/irsensor/irs_types.h"
+#include "hid_core/frontend/overlay_udp.h"
 
 namespace Core::HID {
 const std::size_t max_emulated_controllers = 2;

@@ -9,6 +9,9 @@ add_library(hid_core STATIC
     frontend/emulated_console.h
     frontend/emulated_controller.cpp
     frontend/emulated_controller.h
+    frontend/overlay_state.h
+    frontend/overlay_udp.cpp
+    frontend/overlay_udp.h
     frontend/emulated_devices.cpp
     frontend/emulated_devices.h
     frontend/input_converter.cpp

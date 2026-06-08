@@ -1918,6 +1918,8 @@ void EmulatedController::StatusUpdate() {
         }
         device->ForceUpdate();
     }
+
+    ApplyOverlay(npad_id_type, controller);
 }
 
 NpadButton EmulatedController::GetTurboButtonMask() const {
