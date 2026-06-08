@@ -157,9 +157,9 @@ void ConfigureInputAdvanced::ApplyConfiguration() {
     Settings::values.enable_joycon_driver = ui->enable_joycon_driver->isChecked();
     Settings::values.enable_procon_driver = ui->enable_procon_driver->isChecked();
     Settings::values.random_amiibo_id = ui->random_amiibo_id->isChecked();
-    { Settings::values.overlay_port = static_cast<u16>(ui->overlay_port->value()); }
-    { const bool was = Settings::values.overlay_enabled.GetValue(); }
-    { const bool will = ui->overlay_enabled->isChecked(); }
+    Settings::values.overlay_port = static_cast<u16>(ui->overlay_port->value());
+    const bool was = Settings::values.overlay_enabled.GetValue();
+    const bool will = ui->overlay_enabled->isChecked();
     if (will && !was) { int s = socket(AF_INET, SOCK_DGRAM, 0);
       if (s >= 0) { sockaddr_in a{}; a.sin_family = AF_INET;
         a.sin_port = htons(Settings::values.overlay_port.GetValue());
