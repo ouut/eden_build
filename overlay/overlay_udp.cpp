@@ -22,6 +22,7 @@ using ssize_t = SSIZE_T;
 #endif
 
 #include "common/logging.h"
+#include "common/settings.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/frontend/overlay_state.h"
 #include "hid_core/hid_types.h"
@@ -181,6 +182,14 @@ void ShutdownOverlayUdp() {
 }
 
 void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
+    // ── Lazy init: first call reads settings and starts UDP listener ────
+    if (overlay_socket < 0) {
+        if (Settings::values.enable_overlay) {
+            InitOverlayUdp(Settings::values.overlay_port);
+        }
+        // If still disabled (port in use or setting off), nothing to do
+    }
+
     // ── Drain incoming UDP packets ──────────────────────────────────────
     if (overlay_socket >= 0) {
         u8 buf[OverlayProtocol::PACKET_SIZE];

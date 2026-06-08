@@ -1,0 +1,14 @@
+--- a/src/common/settings.h	2026-06-07 03:01:03
++++ b/src/common/settings.h	2026-06-07 22:29:01
+@@ -708,6 +708,11 @@
+     Setting<std::string> udp_input_servers{linkage, "127.0.0.1:26760", "udp_input_servers",
+                                            Category::Controls};
+     Setting<bool> enable_udp_controller{linkage, false, "enable_udp_controller",
++
++    // Overlay
++    Setting<bool> enable_overlay{linkage, false, "enable_overlay", Category::Overlay};
++    Setting<u16> overlay_port{linkage, 26760, "overlay_port", Category::Overlay};
++
+                                         Category::Controls};
+ 
+     Setting<bool> pause_tas_on_load{linkage, true, "pause_tas_on_load", Category::Controls};

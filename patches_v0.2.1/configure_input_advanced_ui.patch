@@ -1,0 +1,35 @@
+--- a/src/yuzu/configuration/configure_input_advanced.ui	2026-06-07 03:01:04
++++ b/src/yuzu/configuration/configure_input_advanced.ui	2026-06-07 22:29:01
+@@ -2755,8 +2755,32 @@
+                        <property name="text">
+                          <string>Configure</string>
+                        </property>
++                     </widget>
++                   </item>
++                   <item row="9" column="0">
++                     <widget class="QCheckBox" name="enable_overlay">
++                      <property name="text">
++                       <string>Enable overlay input (UDP)</string>
++                      </property>
++                      <property name="toolTip">
++                       <string>Receive external stick/button/motion data via UDP OVER protocol</string>
++                      </property>
++                     </widget>
++                   </item>
++                   <item row="9" column="2">
++                     <widget class="QSpinBox" name="overlay_port">
++                      <property name="minimum">
++                       <number>1024</number>
++                      </property>
++                      <property name="maximum">
++                       <number>65535</number>
++                      </property>
++                      <property name="value">
++                       <number>26760</number>
++                      </property>
+                      </widget>
+                    </item>
++
+                  </layout>
+                </widget>
+              </item>

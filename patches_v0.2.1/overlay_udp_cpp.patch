@@ -1,0 +1,33 @@
+--- a/src/hid_core/frontend/overlay_udp.cpp	2026-06-07 03:01:59
++++ /tmp/b/src/hid_core/frontend/overlay_udp.cpp	2026-06-07 22:29:52
+@@ -11,6 +11,7 @@
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+ using socklen_t = int;
++using ssize_t = SSIZE_T;
+ #define CLOSE_SOCKET closesocket
+ #else
+ #include <arpa/inet.h>
+@@ -21,6 +22,7 @@
+ #endif
+ 
+ #include "common/logging.h"
++#include "common/settings.h"
+ #include "hid_core/frontend/emulated_controller.h"
+ #include "hid_core/frontend/overlay_state.h"
+ #include "hid_core/hid_types.h"
+@@ -180,6 +182,14 @@
+ }
+ 
+ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
++    // ── Lazy init: first call reads settings and starts UDP listener ────
++    if (overlay_socket < 0) {
++        if (Settings::values.enable_overlay) {
++            InitOverlayUdp(Settings::values.overlay_port);
++        }
++        // If still disabled (port in use or setting off), nothing to do
++    }
++
+     // ── Drain incoming UDP packets ──────────────────────────────────────
+     if (overlay_socket >= 0) {
+         u8 buf[OverlayProtocol::PACKET_SIZE];
