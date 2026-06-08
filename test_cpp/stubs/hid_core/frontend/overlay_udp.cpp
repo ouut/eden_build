@@ -168,7 +168,7 @@ void InitOverlayUdp(u16 port) {
 
     if (bind(overlay_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         LOG_WARNING(Service_HID,
-                    "Overlay: port {} is already in use, overlay disabled", port);
+                    "Overlay: port %d is already in use, overlay disabled", port);
         CLOSE_SOCKET(overlay_socket);
         overlay_socket = -1;
         return;
