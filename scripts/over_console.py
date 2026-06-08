@@ -25,6 +25,7 @@ Hold LEFT SHIFT for half-stick (modifier, scale 0.5).
 """
 
 import argparse
+import os
 import socket
 import struct
 import tkinter as tk
@@ -142,8 +143,10 @@ class OverConsole:
         tk.Label(f, textvariable=self._status, fg="gray").pack()
         tk.Label(f, text="Sticks: WASD(left) IJKL(right) | U/J=AB Y/H=XY R/T=LR Q/E=ZL/ZR 1/2=L3/R3 -/=MINUS/PLUS | DPad:Arrows | Shift=half | Tab=pad | Esc=quit",
                  font=("", 9), fg="gray").pack()
-        self._tk.bind("<KeyPress>", self._on_press)
-        self._tk.bind("<KeyRelease>", self._on_release)
+        self._tk.bind("<KeyPress>", self._on_key)
+        self._tk.bind("<KeyRelease>", self._on_key)
+        self._log = open(os.path.join(os.path.expanduser("~"), "over_console.log"), "w")
+        self._log.write("OVER Console started\n"); self._log.flush()
         self._tk.protocol("WM_DELETE_WINDOW", self.stop)
         self._tk.focus_force()
         self._running = True
@@ -153,14 +156,26 @@ class OverConsole:
 
     def stop(self):
         self._running = False
+        if hasattr(self, '_log') and self._log:
+            self._log.close()
         if self._tk: self._tk.quit()
 
-    def _on(self, event, is_press):
+    def _log_event(self, msg):
+        print(msg)
+        if hasattr(self, '_log') and self._log:
+            self._log.write(msg + "\n"); self._log.flush()
+
+    def _on_key(self, event):
+        """Single handler for both press and release. Distinguishes by event.type."""
         if not self._running: return
+
         kc = event.keycode
         ks = event.keysym
+        is_press = (event.type == "2")  # tkinter EventType.KeyPress
 
-        # Normalize letter keysym to lowercase (macOS sends uppercase on press)
+        self._log_event(f"[{'PRESS' if is_press else 'RELEASE'}] type={event.type} kc={kc} ks={ks} char={repr(event.char)}")
+
+        # Normalize letter keysym to lowercase
         if len(ks) == 1 and ks.isalpha():
             ks = ks.lower()
 
@@ -175,13 +190,10 @@ class OverConsole:
                 self._keys_held[kc] = ks
                 self._send(); self._update()
         else:
-            # macOS tkinter bug: KeyRelease keysym can be "Other" — use keycode
-            old_ks = self._keys_held.pop(kc, None)
-            if old_ks is not None:
+            # KeyRelease: remove by keycode
+            if kc in self._keys_held:
+                del self._keys_held[kc]
                 self._send(); self._update()
-
-    def _on_press(self, e): self._on(e, True)
-    def _on_release(self, e): self._on(e, False)
 
     def _update(self):
         parts = []
