@@ -124,8 +124,10 @@ class OverConsole:
 
         self._lx, self._ly = stick["left"]
         self._rx, self._ry = stick["right"]
-        if self._lx != 0.0 or self._ly != 0.0: self._ctrl |= CTRL_LEFT_X | CTRL_LEFT_Y
-        if self._rx != 0.0 or self._ry != 0.0: self._ctrl |= CTRL_RIGHT_X | CTRL_RIGHT_Y
+        # Always set control bits for sticks so center (0,0) is sent as intentional
+        self._ctrl |= CTRL_LEFT_X | CTRL_LEFT_Y | CTRL_RIGHT_X | CTRL_RIGHT_Y
+        # Always include BUTTON so release (btns=0) clears overlay buttons
+        self._ctrl |= CTRL_BUTTON
 
         self._sock.sendto(self._pack(), (self.host, self.port))
 
