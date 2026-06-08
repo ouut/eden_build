@@ -104,7 +104,7 @@ jobs:
           patch -p1 -d eden < "$PDIR"/configure_input_advanced_ui.patch
           patch -p1 -d eden < "$PDIR"/configure_input_advanced_cpp.patch
           grep -q 'ApplyOverlay' eden/src/hid_core/frontend/emulated_controller.cpp && \
-          grep -q 'enable_overlay' eden/src/yuzu/configuration/configure_input_advanced.cpp && \
+          grep -q 'overlay_enabled' eden/src/yuzu/configuration/configure_input_advanced.cpp && \
             echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
 
 
