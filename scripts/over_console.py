@@ -158,20 +158,34 @@ class OverConsole:
     def _on(self, event, is_press):
         if not self._running: return
         ks = event.keysym
+        ch = repr(event.char)
+
+        # Normalize: macOS KeyPress sends uppercase keysym, KeyRelease lowercase
+        if len(ks) == 1 and ks.isalpha():
+            ks = ks.lower()
+
         if is_press:
+            print(f"[PRESS] keysym={event.keysym}→{ks} char={ch} held_before={sorted(self._keys_held)}")
             if ks == "Escape": self.stop(); return
             if ks == "Tab":
                 self.active_pad = (self.active_pad + 1) % 8
                 self._tk.title(f"OVER Console — pad {self.active_pad} — {self.host}:{self.port}")
                 self._send(); self._update(); return
-            if ks in self._keys_held: return  # auto-repeat
+            if ks in self._keys_held: print(f"  → already held, skip (auto-repeat)"); return
             if ks in KEY_MAP or ks in ("Shift_L", "Shift_R"):
                 self._keys_held.add(ks)
                 self._send(); self._update()
+                print(f"  → added, held={sorted(self._keys_held)}")
+            else:
+                print(f"  → not in KEY_MAP, ignored")
         else:
+            print(f"[RELEASE] keysym={event.keysym}→{ks} char={ch} held_before={sorted(self._keys_held)}")
             if ks in self._keys_held:
                 self._keys_held.discard(ks)
                 self._send(); self._update()
+                print(f"  → removed, held={sorted(self._keys_held)}")
+            else:
+                print(f"  → NOT FOUND in held, ignored")
 
     def _on_press(self, e): self._on(e, True)
     def _on_release(self, e): self._on(e, False)
