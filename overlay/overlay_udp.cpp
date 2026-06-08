@@ -185,7 +185,7 @@ void ApplyOverlay(NpadIdType npad_id, ControllerStatus& controller) {
     // ── Lazy init: first call reads settings and starts UDP listener ────
     if (overlay_socket < 0) {
         if (Settings::values.overlay_enabled) {
-            InitOverlayUdp(Settings::values.overlay_port);
+            InitOverlayUdp(Settings::values.overlay_port.GetValue());
         }
         // If still disabled (port in use or setting off), nothing to do
     }
