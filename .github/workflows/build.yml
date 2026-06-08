@@ -100,9 +100,14 @@ jobs:
           patch -p1 -d eden < "$PDIR"/emulated_controller.h.patch
           patch -p1 -d eden < "$PDIR"/emulated_controller.cpp.patch
           patch -p1 -d eden < "$PDIR"/CMakeLists_hid_core.txt.patch
+          patch -p1 -d eden < "$PDIR"/overlay_udp_cpp.patch
+          patch -p1 -d eden < "$PDIR"/settings_ui.patch
+          patch -p1 -d eden < "$PDIR"/configure_input_advanced_ui.patch
+          patch -p1 -d eden < "$PDIR"/configure_input_advanced_cpp.patch
           grep -q 'ApplyOverlay' eden/src/hid_core/frontend/emulated_controller.cpp && \
+          grep -q 'enable_overlay' eden/src/yuzu/configuration/configure_input_advanced.cpp && \
             echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
-            echo "Overlay C++ patch applied successfully" || { echo "Overlay patch FAILED"; exit 1; }
+
 
       - name: Apply Overlay (Lua)
         if: ${{ inputs.patch-type == 'overlay-lua' }}
