@@ -1,177 +1,164 @@
-# Eden DSU Build
+# Eden Overlay C++
 
-基于 [Eden-CI/Workflow](https://github.com/Eden-CI/Workflow) 的 CI 构建仓库，增加 DSU（Cemuhook）协议完整手柄支持。
+纯 C++ 实现的外部输入叠加层。通过 UDP 接收 OVER 协议数据包，与物理手柄输入实时合并，驱动 Eden Switch 模拟器的任意玩家。
 
-## DSU 协议支持
+**核心场景**：玩家手持物理 Joy-Con，手机/脚本同时发 UDP 补充额外的摇杆/按键/体感。物理和 overlay 输入无缝混合，按轴独立控制。
 
-在官方构建流程中增加一个 patch 步骤：将 `enable_udp_controller` 默认值从 `false` 改为 `true`。
-
-改动位于 `.github/workflows/build.yml` 的 clone job，在拉取 Eden 源码后、构建前执行：
+## 协议
 
 ```
-git clone Eden → sed 改 settings.h → 全平台构建
+84-byte UDP 包, little-endian
+┌──────┬──────┬──────────┬──────────────┬──────────────┬──────────────┬──────────────────────────┐
+│ OVER │ pad  │ reserved │ control_mask │ button_mask  │ left_x left_y│ left/right gyro + accel │
+│ 4B   │ 1B   │ 3B       │ u32          │ u64          │ right_x ry   │ 12×f32 = 48B            │
+└──────┴──────┴──────────┴──────────────┴──────────────┴──────────────┴──────────────────────────┘
 ```
 
-## 构建
+`control_mask` 声明 overlay 控制哪些字段（bit 0=按键, 1-4=4个摇杆轴, 5-8=体感组）。置位的字段 overlay 生效，未置位的字段物理输入保留。
 
-手动触发：
+详见 [CLAUDE.md](CLAUDE.md)。
 
-1. 进入 [Actions](../../actions) 页面
-2. 选择 **"DSU Build"**
-3. 点击 **Run workflow**
-4. 等待三平台（macOS / Windows / Linux）构建完成
-5. 构建产物自动发布到 [Releases](../../releases) 页面
+## 目录结构
 
-## DSU 使用方式
+```
+overlay_cpp/
+├── overlay/                    # 新增文件 — 复制到 Eden
+│   ├── overlay_state.h         #   OverlayState 结构体 + 常量
+│   ├── overlay_udp.h           #   InitOverlayUdp / ApplyOverlay 声明
+│   └── overlay_udp.cpp         #   UDP socket + 协议解析 + merge 实现
+├── patches_v0.2.1/             # Eden v0.2.1 的修改文件（完整替换）
+│   ├── files/                  #   6 个修改后的 Eden 源文件（直接 cp）
+│   └── apply_changes.sh        #   修改步骤参考（sed 脚本）
+├── scripts/
+│   ├── over_console.py         #   键盘 → OVER 协议的交互控制台（tkinter）
+│   ├── over_sender.py          #   OVER 协议包构建/发送库
+│   ├── over_test.py            #   自动诊断脚本（6 个测试包）
+│   └── apply_overlay.sh        #   一键集成脚本（cp 文件到 eden_build）
+├── tests/                      #   Python 测试套件（113 tests）
+└── CLAUDE.md                   #   完整设计文档
+```
 
-1. 在手机安装 DSU Server（支持 Cemuhook 协议，UDP 26760 端口）
-2. 模拟器控制器设置中选择 "UDP Controller" 作为输入设备
-3. 填入 DSU Server IP 和端口（默认 26760）
-4. 按键、摇杆、体感同时生效
+## 快速开始
 
-## 测试脚本
+### 1. 下载构建产物
 
-### dsu_server.py（推荐）
+从 GitHub Actions → **Overlay C++ v0.2.1** workflow 下载对应平台的构建产物。
 
-可扩展的 DSU 服务器，提供简洁的 Python API。键盘映射从 `keyboard_config.json` 读取，修改 JSON 即可改键位，无需改代码。
+### 2. 启用 Overlay
 
-**命令行：**
+- Eden → Settings → Input → Advanced → Other
+- 勾选 **"Enable overlay input (UDP)"**
+- 端口默认 26760
+- 点击 Apply
+- 启动游戏
+
+### 3. 发送输入
+
+**交互控制台（键盘模拟）：**
 
 ```bash
-python3 dsu_server.py                     # 键盘 + DSU 服务器
-python3 dsu_server.py --no-keyboard       # 仅 DSU，不用键盘
-python3 dsu_server.py -c my_keys.json     # 用自定义配置
+python3 scripts/over_console.py                  # pad 0, 本地
+python3 scripts/over_console.py -p 1              # pad 1
+python3 scripts/over_console.py --host 10.0.0.5   # 远程
 ```
 
-**键盘操作（toggle 模式）：**
+| 按键 | 功能 |
+|------|------|
+| WASD | 左摇杆 |
+| IJKL | 右摇杆 |
+| U/J | A / B |
+| Y/H | X / Y |
+| R/T | L / R |
+| Q/E | ZL / ZR |
+| 1/2 | L3 / R3 |
+| -/= | MINUS / PLUS |
+| 方向键 | D-Pad |
+| Shift | 半推摇杆 |
+| Tab | 切换 pad (0-7) |
+| Esc | 退出 |
 
-- 按键**按下**即激活（添加到当前组合），**再次按同一键**取消
-- 多个键可同时激活，实现组合键 + 摇杆方向组合
-- `Space` 一键清除所有激活的键
-- 摇杆键（W/A/S/D）支持组合（如 W+D = 右上），修饰键按住时范围减半
+**诊断脚本（无需键盘）：**
 
-**键盘配置文件 `keyboard_config.json`：**
-
-```json
-{
-    "port": 26760,
-    "num_pads": 1,
-    "keyboard": {
-        "buttons": {
-            "u": "A",  "j": "B",  "y": "X",  "h": "Y",
-            "r": "L",  "q": "ZL", "t": "R",  "e": "ZR",
-            "z": "L3", ".": "R3",
-            "f": "MINUS", "g": "PLUS",
-            "8": "HOME",  "7": "SHARE"
-        },
-        "dpad": {
-            "up": "UP", "down": "DOWN", "left": "LEFT", "right": "RIGHT"
-        },
-        "sticks": {
-            "left": {
-                "up": "w", "down": "s", "left": "a", "right": "d",
-                "modifier": "x", "scale": 0.5
-            },
-            "right": {
-                "up": "p", "down": "l", "left": "o", "right": ";",
-                "modifier": "/", "scale": 0.5
-            }
-        }
-    }
-}
+```bash
+python3 scripts/over_test.py                    # 自动发 6 个测试包
+python3 scripts/over_test.py 192.168.1.5 26760  # 指定 IP 和端口
 ```
 
-`modifier` 是摇杆范围减半键，`scale` 控制缩小比例（0.5 = 50%）。
-
-**扩展 API：**
+**作为 Python 库：**
 
 ```python
-from dsu_server import DsuServer
+from scripts.over_sender import OverSender
 
-server = DsuServer(port=26760, num_pads=1, keyboard=False)
-
-server.press("A")              # 按住 A
-server.press("A", "B")         # 按住 A + B
-server.release()               # 松开所有
-
-server.stick("left", 200, 128)       # 左摇杆 (0-255, 128=居中)
-server.stick("right", 64, 192)       # 右摇杆
-server.motion(gyro=(0.1, 0, 0), accel=(0, 0, 1))
-server.touch(500, 300, pressed=True)
-
-server.start()   # 启动，阻塞
+s = OverSender(pad_id=0, host="127.0.0.1", port=26760)
+s.buttons(A=True, B=True)          # 按键
+s.stick("left", 0.5, 0)            # 左摇杆半推向右
+s.stick("right", 0, 0.8)           # 右摇杆向上
+s.motion("left", gyro=(0.1,0,0))   # 左手陀螺
+s.send()                            # 发送 84-byte 包
 ```
 
-**自定义逻辑示例（体感→按键）：**
+## 本地集成（开发者）
 
-```python
-from dsu_server import DsuServer
-import time, threading
+将 overlay 集成到本地 Eden 代码树：
 
-server = DsuServer(port=26760, keyboard=False)
-
-def motion_to_button():
-    while True:
-        gyro = read_gyro()
-        if gyro[0] > 0.5:
-            server.press("RIGHT")
-        elif gyro[0] < -0.5:
-            server.press("LEFT")
-        else:
-            server.release()
-        time.sleep(0.01)
-
-threading.Thread(target=motion_to_button, daemon=True).start()
-server.start()
+```bash
+./scripts/apply_overlay.sh /path/to/eden_build
 ```
 
-启动后在模拟器中选 "UDP Controller" 作为输入设备即可测试。
+做 9 个文件操作：3 个新文件（overlay/*.h *.cpp）+ 6 个文件替换（patches_v0.2.1/files/）。
 
-## 按键映射
+## CI 构建
 
-DSU 协议使用 16 位掩码（`digital_button`）传输按键状态，每个 bit 对应一个按钮：
+3 个独立的 workflow，各管各的分支：
 
-```
-Bit 0: Share     Bit 1: L3         Bit 2: R3        Bit 3: Options
-Bit 4: DUp       Bit 5: DRight     Bit 6: DDown      Bit 7: DLeft
-Bit 8: L2        Bit 9: R2         Bit 10: L1        Bit 11: R1
-Bit 12: Triangle Bit 13: Circle    Bit 14: Cross     Bit 15: Square
-```
+| Workflow | 分支 | 说明 |
+|----------|------|------|
+| **DSU Build** | `master` | Eden + DSU 协议 patch |
+| **Overlay Build** | `overlay` | Eden + Lua overlay |
+| **Overlay C++ v0.2.1** | `overlay_cpp` | Eden v0.2.1 + C++ overlay |
 
-Eden 收到包后在 `OnPadData()` 中按这个顺序逐位读取，再通过 `GetButtonMappingForDevice()` 映射到 Switch 按键：
+每个 workflow 手动触发，从 Actions 页面下载构建产物。不做自动 release。
 
-| DSU 名称 | Switch 按键 | 游戏中效果 |
-|---------|-----------|----------|
-| Circle | A | 确认 / 跳跃 |
-| Cross | B | 取消 / 返回 |
-| Triangle | X | 攻击 |
-| Square | Y | 重击 |
-| Options | Plus (+) | 菜单 |
-| Share | Minus (-) | 地图 |
-| DUp / DDown / DLeft / DRight | 十字键 | 方向 |
-| L1 | L | 左肩键 |
-| R1 | R | 右肩键 |
-| L2 | ZL | 左扳机 |
-| R2 | ZR | 右扳机 |
-| L3 | Left Stick Press | 左摇杆按下 |
-| R3 | Right Stick Press | 右摇杆按下 |
+## 新版本适配
 
-## 数据流
+Eden 发布新版本（如 v0.3.0）时：
 
-```
- DSU Server (dsu_server.py / 手机 App)      Eden 模拟器                    游戏
- ───────────────────────────────────         ───────────                    ────
- digital_button = 1 << 13  (Circle)         OnPadData()
- pack PadData ───── UDP ────────────────→   解析 bit 13 → PadButton::Circle
-                                                          ↓
-                                             GetButtonMappingForDevice()
-                                             Circle → A ──────────────────→  A 按下
+```bash
+# 1. 获取新版源码
+git clone --branch v0.3.0 https://git.eden-emu.dev/eden-emu/eden.git
+
+# 2. 创建对应目录
+mkdir -p patches_v0.3.0/files
+
+# 3. 复制需要修改的 6 个源文件
+cp eden/src/common/settings.h                         patches_v0.3.0/files/
+cp eden/src/hid_core/frontend/emulated_controller.h   patches_v0.3.0/files/
+cp eden/src/hid_core/frontend/emulated_controller.cpp patches_v0.3.0/files/
+cp eden/src/hid_core/CMakeLists.txt                   patches_v0.3.0/files/CMakeLists_hid_core.txt
+cp eden/src/yuzu/configuration/configure_input_advanced.ui  patches_v0.3.0/files/
+cp eden/src/yuzu/configuration/configure_input_advanced.cpp patches_v0.3.0/files/
+
+# 4. 参照 patches_v0.2.1/apply_changes.sh 手工修改
+# 5. 创建 overlay_cpp_v0.3.0.yml workflow
 ```
 
-## 协议参考
+## 设计决策
 
-- [cemuhook-protocol](https://github.com/v1993/cemuhook-protocol)
+| # | 问题 | 答案 |
+|---|------|------|
+| 1 | button_mask 类型 | u64（匹配 Eden NpadButtonState.raw） |
+| 2 | OverlayState 位置 | 全局数组，不挂在 controller 上 |
+| 3 | 物理/overlay 时间戳 | 不做——overlay active 时直写，staleness 退出 |
+| 4 | 摇杆方向键位 | ApplyOverlay 同步设置阈值 0.5 |
+| 5 | 体感写入 | 直接写 ControllerStatus.motion_state |
+| 6 | 线程安全 | 单线程，非阻塞 recvfrom |
+| 7 | socket 生命周期 | 模块静态变量，InitOverlayUdp 懒初始化 |
+| 8 | 集成方式 | 完整文件替换，不用 diff patch |
+| 9 | 端口占用检测 | UI Apply 时测试 bind，失败弹窗 |
+| 10 | pad_id 越界 | clamp 0-7 |
+
+详见 [CLAUDE.md](CLAUDE.md)。
 
 ## 许可
 
-GPLv3。基于 [Eden-CI/Workflow](https://github.com/Eden-CI/Workflow)。
+GPLv3。基于 [Eden Emulator](https://git.eden-emu.dev/eden-emu/eden)。
