@@ -92,7 +92,7 @@ class OverConsole:
         self._lx = 0.0; self._ly = 0.0; self._rx = 0.0; self._ry = 0.0
         self._lg = (0.0,0.0,0.0); self._la = (0.0,0.0,1.0)
         self._rg = (0.0,0.0,0.0); self._ra = (0.0,0.0,1.0)
-        self._keys_held = set()
+        self._keys_held = {}       # keycode → keysym
         self._tk = None; self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._running = False
 
@@ -105,11 +105,11 @@ class OverConsole:
     def _send(self):
         self._ctrl = 0; self._btns = 0
         stick = {"left": [0.0, 0.0], "right": [0.0, 0.0]}
-        mod = "Shift_L" in self._keys_held or "Shift_R" in self._keys_held
+        mod = any(ks in ("Shift_L", "Shift_R") for ks in self._keys_held.values())
         val = STICK_HALF if mod else STICK_FULL
 
-        for key in self._keys_held:
-            act = KEY_MAP.get(key)
+        for kc, ks in self._keys_held.items():
+            act = KEY_MAP.get(ks)
             if not act: continue
             if act[0] == "stick":
                 _, side, d = act
@@ -157,48 +157,41 @@ class OverConsole:
 
     def _on(self, event, is_press):
         if not self._running: return
+        kc = event.keycode
         ks = event.keysym
-        ch = repr(event.char)
 
-        # Normalize: macOS KeyPress sends uppercase keysym, KeyRelease lowercase
+        # Normalize letter keysym to lowercase (macOS sends uppercase on press)
         if len(ks) == 1 and ks.isalpha():
             ks = ks.lower()
 
         if is_press:
-            print(f"[PRESS] keysym={event.keysym}→{ks} char={ch} held_before={sorted(self._keys_held)}")
             if ks == "Escape": self.stop(); return
             if ks == "Tab":
                 self.active_pad = (self.active_pad + 1) % 8
                 self._tk.title(f"OVER Console — pad {self.active_pad} — {self.host}:{self.port}")
                 self._send(); self._update(); return
-            if ks in self._keys_held: print(f"  → already held, skip (auto-repeat)"); return
+            if kc in self._keys_held: return  # auto-repeat
             if ks in KEY_MAP or ks in ("Shift_L", "Shift_R"):
-                self._keys_held.add(ks)
+                self._keys_held[kc] = ks
                 self._send(); self._update()
-                print(f"  → added, held={sorted(self._keys_held)}")
-            else:
-                print(f"  → not in KEY_MAP, ignored")
         else:
-            print(f"[RELEASE] keysym={event.keysym}→{ks} char={ch} held_before={sorted(self._keys_held)}")
-            if ks in self._keys_held:
-                self._keys_held.discard(ks)
+            # macOS tkinter bug: KeyRelease keysym can be "Other" — use keycode
+            old_ks = self._keys_held.pop(kc, None)
+            if old_ks is not None:
                 self._send(); self._update()
-                print(f"  → removed, held={sorted(self._keys_held)}")
-            else:
-                print(f"  → NOT FOUND in held, ignored")
 
     def _on_press(self, e): self._on(e, True)
     def _on_release(self, e): self._on(e, False)
 
     def _update(self):
         parts = []
-        for k in sorted(self._keys_held):
-            a = KEY_MAP.get(k)
+        for ks in sorted(self._keys_held.values()):
+            a = KEY_MAP.get(ks)
             if a:
                 if a[0] == "button": parts.append(a[1])
                 elif a[0] == "stick": parts.append(f"{a[1][0].upper()}S-{a[2][:2]}")
         label = ",".join(parts) if parts else "(idle)"
-        half = " [HALF]" if ("Shift_L" in self._keys_held or "Shift_R" in self._keys_held) else ""
+        half = " [HALF]" if any(ks in ("Shift_L", "Shift_R") for ks in self._keys_held.values()) else ""
         self._status.set(f"pad={self.active_pad} [{label}]{half}")
 
 
