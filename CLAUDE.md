@@ -258,11 +258,47 @@ if (now - overlay_states[pad].last_update > 100ms):
     return;  // 超时，移除 overlay，物理全权接管
 ```
 
-### 按键：OR 合并（control_mask bit 0）
+### 按键：clear-then-set（不是纯 OR）
+
+**为什么纯 OR 有根本缺陷？**
+
+Eden 的物理手柄每帧通过 `Assign(1)` / `Assign(0)` 逐位设置按键状态。按钮 A 按下时 `Assign(1)`，松开时 `Assign(0)`——清零是显式的。
+
+但 overlay 的 OR 合并**只能加不能减**：
+
 ```
-if (control_mask & 1):
-    npad_button_state.raw |= overlay.button_mask;
+帧1: phys=0, overlay 设 A → raw = 0 | A = A  ✅
+帧2: phys=0, overlay 松 A → raw = A | 0 = A  ❌ 松不开！
 ```
+
+`1 | 0 = 1`，OR 永远无法把 1 变回 0。摇杆没这个问题，因为摇杆是直接写值：`stick.x = 0` 就是归中。
+
+**修复：clear-then-set**
+
+不直接 OR。跟踪上一帧 overlay 设了哪些位（`button_mask_prev`），先清掉再设新的：
+
+```cpp
+// 不是 raw |= new
+// 而是 raw = (raw & ~prev) | new
+u64 raw = phys;
+raw &= ~state.button_mask_prev;   // 清掉上一帧 overlay 的贡献
+raw |= state.button_mask;          // 加上这一帧 overlay 的贡献
+state.button_mask_prev = state.button_mask;  // 记住，下帧清
+```
+
+帧1 按 A：`raw = (0 & ~0) | A = A`，prev 记 A
+帧2 松 A：`raw = (0 & ~A) | 0 = 0`，prev 记 0 ✅
+
+**新包到达时保留 prev**
+
+UDP 包到达时 `ParsePacket` 创建全新的 `OverlayState`，`button_mask_prev` 被清零。必须在赋值前保留：
+
+```cpp
+state.button_mask_prev = overlay_states[pad_id].button_mask_prev;
+overlay_states[pad_id] = state;
+```
+
+否则新包一到，prev 丢失，下一帧又清不掉了。
 
 ### 摇杆：control_mask bits 1-4 直写 + 方向键位同步
 ```
