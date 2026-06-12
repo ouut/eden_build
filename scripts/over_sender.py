@@ -3,7 +3,40 @@
 OVER protocol test sender.  Sends 84-byte UDP packets matching the
 Eden Overlay C++ protocol.
 
-Usage:
+───────────────────────────────────────────────────────────────
+Quick reference — all basic functions
+───────────────────────────────────────────────────────────────
+
+  from scripts.over_sender import OverSender
+
+  sender = OverSender(pad_id=0)          # defaults: 127.0.0.1:26760, pad 0
+
+  # Buttons
+  sender.buttons(A=True, B=True)         # press A and B (auto-sets control_mask bit 0)
+  sender.clear_buttons()                 # release all buttons
+
+  # Sticks — side="left" or "right", x/y in [-1.0, 1.0]
+  sender.stick("left",  x=0.5, y=0)      # left stick half-right
+  sender.stick("right", x=0,   y=-1.0)   # right stick all the way down
+
+  # Motion — source="left" or "right"
+  sender.motion("left", gyro=(0, 0.1, 0))            # left gyro Y=0.1 rad/s
+  sender.motion("right", accel=(0, 0, 1.0))          # right accel Z=1.0 G
+
+  # Send
+  sender.send()                           # send one packet
+
+  # Shortcuts
+  sender.tap("A")                         # press A → sleep 50ms → release (2 packets)
+  sender.stick_tap("left", 1.0, 0)        # flick left stick right, then return to center
+
+  # Chaining
+  sender.stick("left", 1.0, 0).buttons(A=True).send()
+
+───────────────────────────────────────────────────────────────
+CLI usage
+───────────────────────────────────────────────────────────────
+
   python3 scripts/over_sender.py A B              # press A+B on pad 0, send once
   python3 scripts/over_sender.py -p 1 A            # press A on pad 1
   python3 scripts/over_sender.py -H A              # hold A (sends at 60Hz until Ctrl-C)
@@ -11,21 +44,19 @@ Usage:
   python3 scripts/over_sender.py motion gyro 0 0.1 0  # left gyro Y=0.1 rad/s
   python3 scripts/over_sender.py --host 192.168.1.100 --port 26760 A
 
-control_mask is computed automatically: whichever fields you set via buttons(),
-stick(), or motion() have their mask bits asserted.  The sender only touches
-the fields you asked for; all others remain under physical control.
+───────────────────────────────────────────────────────────────
+control_mask — auto-managed
+───────────────────────────────────────────────────────────────
+
+Whichever fields you set via buttons(), stick(), or motion() have their
+mask bits asserted automatically.  The sender only touches the fields you
+asked for; all others remain under physical control.
 
 You can also set the mask explicitly:
-  sender.control(buttons=True, left_x=True)  # manual override
 
-As a module:
-  from scripts.over_sender import OverSender
-
-  sender = OverSender(pad_id=0)
-  sender.buttons(A=True, B=True)               # auto-sets control_mask bit 0
-  sender.stick(side="left", x=0.5, y=0)        # auto-sets bits 1,2
-  sender.send()
-  # Result: buttons OR-merged, left stick controlled, right stick untouched
+  sender.control(buttons=True, left_x=True, right_gyro=False)
+  sender.clear_control()
+  print(sender.control_mask)              # read current mask
 """
 
 import argparse
